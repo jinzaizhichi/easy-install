@@ -49,6 +49,7 @@ export function buildClientConfig(options) {
   const asciiMode = normalizeAsciiMode(options.ascii || "prefer_entropy");
   const aead = String(options.aead || "none").trim() || "none";
   const pureDownlink = options.enablePureDownlink === true;
+  const httpMaskMode = normalizeHttpMaskMode(options.httpMaskMode || "ws");
   const multiplex = normalizeMultiplexMode(options.httpMaskMultiplex || "off");
   const pathRoot = resolvePathRoot(options.pathRoot, options.pathRootSeed || options.key || options.publicHost);
   const tlsEnabled = options.httpMaskTLS !== false;
@@ -65,7 +66,7 @@ export function buildClientConfig(options) {
     enable_pure_downlink: pureDownlink,
     httpmask: {
       disable: false,
-      mode: "ws",
+      mode: httpMaskMode,
       tls: tlsEnabled,
       host: String(options.httpMaskHost || "").trim(),
       path_root: pathRoot,
@@ -85,7 +86,7 @@ export function buildShortLinkFromClientConfig(config) {
     e: config.aead,
     m: config.local_port,
     ht: config.httpmask?.tls !== false,
-    hm: "ws",
+    hm: normalizeHttpMaskMode(config.httpmask?.mode || "ws"),
     x: config.enable_pure_downlink === false,
   };
   if (config.httpmask?.host) payload.hh = config.httpmask.host;
@@ -107,14 +108,15 @@ export function buildClashNode(config, nodeName = "sudoku-cf-worker-pure") {
     "  padding-min: 0",
     "  padding-max: 0",
     `  table-type: ${encodeAscii(config.ascii)}`,
-    "  http-mask: true",
-    "  http-mask-mode: ws",
-    `  http-mask-tls: ${config.httpmask?.tls !== false}`,
-    `  http-mask-multiplex: "${normalizeMultiplexMode(config.httpmask?.multiplex || "off")}"`,
     `  enable-pure-downlink: ${config.enable_pure_downlink !== false}`,
+    "  httpmask:",
+    `    disable: ${config.httpmask?.disable === true}`,
+    `    mode: ${normalizeHttpMaskMode(config.httpmask?.mode || "ws")}`,
+    `    tls: ${config.httpmask?.tls !== false}`,
   ];
-  if (config.httpmask?.host) lines.push(`  http-mask-host: "${config.httpmask.host}"`);
-  if (config.httpmask?.path_root) lines.push(`  http-mask-path-root: "${config.httpmask.path_root}"`);
+  if (config.httpmask?.host) lines.push(`    host: ${yamlQuote(config.httpmask.host)}`);
+  lines.push(`    multiplex: "${normalizeMultiplexMode(config.httpmask?.multiplex || "off")}"`);
+  if (config.httpmask?.path_root) lines.push(`    path-root: ${yamlQuote(config.httpmask.path_root)}`);
   return `${lines.join("\n")}\n`;
 }
 
@@ -157,9 +159,20 @@ function normalizeServerAddress(value, defaultPort = 443) {
   }
 }
 
+function normalizeHttpMaskMode(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "ws";
+  if (["auto", "ws", "stream", "poll", "legacy"].includes(raw)) return raw;
+  throw new Error(`invalid httpmask mode: ${value}`);
+}
+
 function normalizeMultiplexMode(value) {
   const raw = String(value || "").trim().toLowerCase();
   if (!raw || raw === "off") return "off";
   if (raw === "auto" || raw === "on") return raw;
   throw new Error(`invalid httpmask multiplex mode: ${value}`);
+}
+
+function yamlQuote(value) {
+  return `"${String(value).replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }

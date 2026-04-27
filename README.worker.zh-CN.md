@@ -80,8 +80,11 @@ node cf-worker/tools/build-one-line-worker.mjs
 | `SUDOKU_PREFERRED_PROBE_MAX` | `16` | 每次最多探测静态排序靠前的候选数 |
 | `SUDOKU_PREFERRED_PROBE_CONCURRENCY` | `6` | 探测并发数 |
 | `SUDOKU_PREFERRED_PROBE_CACHE_MS` | `300000` | 探测结果缓存毫秒数，避免每次打开短链都重新测速 |
+| `SUDOKU_CLIENT_PREFERRED_PROBE_MAX` | `32` | 首页浏览器端优选最多测试的候选数 |
+| `SUDOKU_PLACEHOLDER_SERVER_ADDRESS` | `cf.877774.xyz` | 首页测速完成前导出配置使用的占位入口 |
 | `SUDOKU_CLIENT_PORT` | `10233` | 导出的客户端本地 mixed 端口 |
 | `SUDOKU_HTTP_MASK_HOST` | `cdn.example.com` | 可选，覆盖客户端 Host/SNI |
+| `SUDOKU_CLIENT_HTTP_MASK_MODE` | `ws` | 导出的客户端 HTTPMask 模式；需要新版 `auto` 格式时可设为 `auto` |
 | `SUDOKU_NODE_NAME` | `sudoku-cf-worker-pure` | Clash 节点名 |
 | `SUDOKU_AEAD` | `none` | 默认 `none` |
 | `SUDOKU_ASCII` | `prefer_entropy` | 也支持 `prefer_ascii`、`up_ascii_down_entropy`、`up_entropy_down_ascii` |

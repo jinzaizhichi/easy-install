@@ -38,6 +38,7 @@ Options:
   --preferred-domain-only <bool>
                              Disable literal IP candidates when true, default false
   --host-header <host>        Optional HTTP Host/SNI override
+  --http-mask-mode <mode>     auto / ws / stream / poll / legacy, default ws
   --aead <name>               AEAD, default none
   --ascii <mode>              prefer_entropy / prefer_ascii / up_*_down_*, default prefer_entropy
   --packed-downlink <bool>    true enables packed downlink, default true
@@ -139,6 +140,7 @@ const config = buildClientConfig({
   localPort: args["local-port"] || "10233",
   pathRoot: args["path-root"] || "",
   httpMaskHost: args["host-header"] || (preferred.address ? args.host : ""),
+  httpMaskMode: args["http-mask-mode"] || "ws",
   aead: args.aead || "none",
   ascii: args.ascii || "prefer_entropy",
   enablePureDownlink: !parseBoolean(args["packed-downlink"], true),

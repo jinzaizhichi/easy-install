@@ -1,7 +1,7 @@
 import { connect } from "cloudflare:sockets";
 
 import { buildClientConfig, buildClashNode, buildShortLinkFromClientConfig, buildWSPath, resolvePathRoot } from "./sudoku-config.mjs";
-import { filterPreferredEntries, loadPreferredIpPool, normalizePreferredIpStrategy, parsePreferredIpList, pickPreferredEntryWithProbe } from "./preferred-ip.mjs";
+import { classifyPreferredEntry, comparePreferredEntries, filterPreferredEntries, loadPreferredIpPool, normalizePreferredIpStrategy, parsePreferredIpList, pickPreferredEntryWithProbe } from "./preferred-ip.mjs";
 import { PackedDownlinkEncoder } from "./sudoku-packed.mjs";
 import {
   ByteQueue,
@@ -51,6 +51,13 @@ function normalizeMultiplexMode(value) {
   throw new Error(`invalid multiplex mode: ${value}`);
 }
 
+function normalizeHttpMaskMode(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) return "ws";
+  if (["auto", "ws", "stream", "poll", "legacy"].includes(raw)) return raw;
+  throw new Error(`invalid httpmask mode: ${value}`);
+}
+
 function detectPreferredRegion(request) {
   const country = String(request.cf?.country || request.headers.get("cf-ipcountry") || "").trim().toUpperCase();
   const countryToRegion = {
@@ -93,6 +100,7 @@ async function loadSettings(env, requestUrl) {
   const customTable = String(env.SUDOKU_CUSTOM_TABLE || "").trim();
   const manageToken = String(env.SUDOKU_MANAGE_TOKEN || "").trim();
   const enablePureDownlink = parseBoolean(env.SUDOKU_ENABLE_PURE_DOWNLINK, false);
+  const httpMaskMode = normalizeHttpMaskMode(env.SUDOKU_CLIENT_HTTP_MASK_MODE || env.SUDOKU_HTTP_MASK_MODE || "ws");
   const httpMaskMultiplex = normalizeMultiplexMode(env.SUDOKU_HTTP_MASK_MULTIPLEX || "off");
   const preferredIpStrategy = normalizePreferredIpStrategy(env.SUDOKU_PREFERRED_IP_STRATEGY || env.SUDOKU_YX_STRATEGY || "best");
   const preferredRegion = String(env.SUDOKU_PREFERRED_REGION || env.SUDOKU_WK || "").trim().toUpperCase();
@@ -107,6 +115,8 @@ async function loadSettings(env, requestUrl) {
   const preferredProbeMax = Math.max(1, Math.min(64, Number.parseInt(String(env.SUDOKU_PREFERRED_PROBE_MAX || env.SUDOKU_YX_PROBE_MAX || "16"), 10) || 16));
   const preferredProbeConcurrency = Math.max(1, Math.min(16, Number.parseInt(String(env.SUDOKU_PREFERRED_PROBE_CONCURRENCY || env.SUDOKU_YX_PROBE_CONCURRENCY || "6"), 10) || 6));
   const preferredProbeCacheMs = Math.max(0, Math.min(3600000, Number.parseInt(String(env.SUDOKU_PREFERRED_PROBE_CACHE_MS || env.SUDOKU_YX_PROBE_CACHE_MS || "300000"), 10) || 300000));
+  const preferredClientProbeMax = Math.max(1, Math.min(256, Number.parseInt(String(env.SUDOKU_CLIENT_PREFERRED_PROBE_MAX || env.SUDOKU_YX_CLIENT_PROBE_MAX || env.SUDOKU_PREFERRED_PROBE_MAX || env.SUDOKU_YX_PROBE_MAX || "32"), 10) || 32));
+  const placeholderServerAddress = String(env.SUDOKU_PLACEHOLDER_SERVER_ADDRESS || env.SUDOKU_PREFERRED_PLACEHOLDER || env.SUDOKU_YX_PLACEHOLDER || "cf.877774.xyz").trim() || "cf.877774.xyz";
   const uplinkTable = await buildSudokuTable(sharedKey, ascii, customTable);
   const downlinkTable = oppositeDirection(uplinkTable);
 
@@ -118,6 +128,7 @@ async function loadSettings(env, requestUrl) {
     customTable,
     manageToken,
     enablePureDownlink,
+    httpMaskMode,
     httpMaskMultiplex,
     httpMaskHost: String(env.SUDOKU_HTTP_MASK_HOST || "").trim(),
     preferredIpInline: String(env.SUDOKU_PREFERRED_IPS || env.SUDOKU_YX || "").trim(),
@@ -135,6 +146,8 @@ async function loadSettings(env, requestUrl) {
     preferredProbeMax,
     preferredProbeConcurrency,
     preferredProbeCacheMs,
+    preferredClientProbeMax,
+    placeholderServerAddress,
     preferredKv: env.C || env.SUDOKU_KV || null,
     preferredKvKey: String(env.SUDOKU_PREFERRED_IP_KV_KEY || "sudoku:preferred_ips").trim() || "sudoku:preferred_ips",
     nodeName: String(env.SUDOKU_NODE_NAME || "sudoku-cf-worker-pure").trim() || "sudoku-cf-worker-pure",
@@ -150,7 +163,7 @@ function configBase(origin, manageToken) {
   return manageToken ? `${origin}/${manageToken}` : origin;
 }
 
-async function resolveExportBundle(settings, request) {
+async function resolvePreferredEntries(settings, request) {
   const preferredPool = await loadPreferredIpPool({
     inlineList: settings.preferredIpInline,
     sourceUrl: settings.preferredIpUrl,
@@ -169,6 +182,52 @@ async function resolveExportBundle(settings, request) {
         enableDomains: settings.enablePreferredDomains,
         region: effectiveRegion,
       });
+  return { preferredPool, eligibleEntries, effectiveRegion };
+}
+
+function buildExportArtifacts(settings, selectedPreferred = null, options = {}) {
+  const serverAddress = selectedPreferred?.address || options.serverAddress || "";
+  const externalIngress = Boolean(serverAddress);
+  const clientConfig = buildClientConfig({
+    publicHost: settings.publicHost,
+    serverAddress,
+    localPort: settings.clientPort,
+    key: settings.sharedKey,
+    aead: settings.aead,
+    ascii: settings.ascii,
+    enablePureDownlink: settings.enablePureDownlink,
+    httpMaskMode: settings.httpMaskMode,
+    httpMaskHost: settings.httpMaskHost || (externalIngress ? settings.publicHost : ""),
+    httpMaskMultiplex: settings.httpMaskMultiplex,
+    pathRoot: settings.pathRoot,
+  });
+  return {
+    clientConfig,
+    clashNode: buildClashNode(clientConfig, settings.nodeName),
+    shortLink: buildShortLinkFromClientConfig(clientConfig),
+  };
+}
+
+function resolvePlaceholderBundle(settings) {
+  return {
+    ...buildExportArtifacts(settings, null, { serverAddress: settings.placeholderServerAddress }),
+    selectedPreferred: null,
+    preferredCount: 0,
+    preferredTotalCount: 0,
+    preferredSource: "",
+    preferredError: "",
+    effectiveRegion: "",
+    preferredProbeEnabled: settings.enablePreferredProbe,
+    isPlaceholder: true,
+  };
+}
+
+function jsValue(value) {
+  return JSON.stringify(value).replace(/</g, "\\u003c");
+}
+
+async function resolveExportBundle(settings, request) {
+  const { preferredPool, eligibleEntries, effectiveRegion } = await resolvePreferredEntries(settings, request);
   const selectedPreferred = await pickPreferredEntryWithProbe(
     eligibleEntries,
     settings.preferredIpStrategy,
@@ -182,22 +241,8 @@ async function resolveExportBundle(settings, request) {
       cacheTtlMs: settings.preferredProbeCacheMs,
     },
   );
-  const clientConfig = buildClientConfig({
-    publicHost: settings.publicHost,
-    serverAddress: selectedPreferred?.address || "",
-    localPort: settings.clientPort,
-    key: settings.sharedKey,
-    aead: settings.aead,
-    ascii: settings.ascii,
-    enablePureDownlink: settings.enablePureDownlink,
-    httpMaskHost: settings.httpMaskHost || (selectedPreferred ? settings.publicHost : ""),
-    httpMaskMultiplex: settings.httpMaskMultiplex,
-    pathRoot: settings.pathRoot,
-  });
   return {
-    clientConfig,
-    clashNode: buildClashNode(clientConfig, settings.nodeName),
-    shortLink: buildShortLinkFromClientConfig(clientConfig),
+    ...buildExportArtifacts(settings, selectedPreferred),
     selectedPreferred,
     preferredCount: eligibleEntries.length,
     preferredTotalCount: preferredPool.entries.length,
@@ -208,6 +253,56 @@ async function resolveExportBundle(settings, request) {
   };
 }
 
+async function resolveClientPreferredPayload(settings, request) {
+  const { preferredPool, eligibleEntries, effectiveRegion } = await resolvePreferredEntries(settings, request);
+  const placeholder = resolvePlaceholderBundle(settings);
+  const sortedEntries = [...eligibleEntries].sort(comparePreferredEntries);
+  const sortedDomainEntries = sortedEntries.filter((entry) => classifyPreferredEntry(entry) === "domain");
+  const domainQuota = Math.min(8, Math.ceil(settings.preferredClientProbeMax / 4));
+  let domainEntries = sortedDomainEntries.slice(0, domainQuota);
+  const ipEntries = sortedEntries.filter((entry) => classifyPreferredEntry(entry) === "ip").slice(0, settings.preferredClientProbeMax - domainEntries.length);
+  if (ipEntries.length + domainEntries.length < settings.preferredClientProbeMax) {
+    domainEntries = domainEntries.concat(sortedDomainEntries.slice(domainEntries.length, settings.preferredClientProbeMax - ipEntries.length));
+  }
+  const seenCandidates = new Set();
+  const candidates = [...ipEntries, ...domainEntries]
+    .filter((entry) => {
+      if (seenCandidates.has(entry.address)) return false;
+      seenCandidates.add(entry.address);
+      return true;
+    })
+    .map((entry) => ({
+      address: entry.address,
+      name: entry.name || "",
+      latencyMs: entry.latencyMs,
+      downloadMbps: entry.downloadMbps,
+      score: entry.score,
+      sourceIndex: entry.sourceIndex || 0,
+    }));
+  return {
+    placeholder: {
+      clientConfig: placeholder.clientConfig,
+      shortLink: placeholder.shortLink,
+      clashNode: placeholder.clashNode,
+    },
+    candidates,
+    preferredCount: eligibleEntries.length,
+    preferredTotalCount: preferredPool.entries.length,
+    preferredSource: preferredPool.preferredSource,
+    preferredError: preferredPool.preferredError,
+    effectiveRegion,
+    publicHost: settings.publicHost,
+    nodeName: settings.nodeName,
+    probe: {
+      enabled: settings.enablePreferredProbe,
+      rounds: settings.preferredProbeRounds,
+      timeoutMs: settings.preferredProbeTimeoutMs,
+      maxCandidates: settings.preferredClientProbeMax,
+      concurrency: settings.preferredProbeConcurrency,
+    },
+  };
+}
+
 function renderPage(settings, requestUrl, exportBundle) {
   const { clientConfig, clashNode, shortLink, selectedPreferred, preferredCount, preferredTotalCount, preferredSource, preferredError, effectiveRegion, preferredProbeEnabled } = exportBundle;
   const clientJson = JSON.stringify(clientConfig, null, 2);
@@ -215,7 +310,9 @@ function renderPage(settings, requestUrl, exportBundle) {
   const base = configBase(url.origin, settings.manageToken);
   const downlinkMode = settings.enablePureDownlink ? "pure_downlink" : "packed_downlink";
   const exportTarget = selectedPreferred ? `${selectedPreferred.address}${selectedPreferred.name ? ` (${selectedPreferred.name})` : ""}` : `${settings.publicHost}:443`;
-  const exportHint = selectedPreferred
+  const exportHint = exportBundle.isPlaceholder
+    ? `当前先使用占位入口 <code>${htmlEscape(clientConfig.server_address)}</code> 输出配置，页面加载后会按访问者当前网络优选并替换。`
+    : selectedPreferred
     ? `当前导出节点使用优选入口 <code>${htmlEscape(exportTarget)}</code>，并自动把 <code>Host/SNI</code> 设为 <code>${htmlEscape(clientConfig.httpmask.host || settings.publicHost)}</code>。`
     : "当前导出节点直接使用你的域名作为入口。";
   const probeMeta = selectedPreferred?.probe
@@ -228,8 +325,14 @@ function renderPage(settings, requestUrl, exportBundle) {
     : preferredError
       ? `优选池不可用，已回退到域名直连。错误：<code>${htmlEscape(preferredError)}</code>`
       : settings.enableBuiltInPreferred
-        ? "默认优选源当前不可用，已回退到域名直连导出。"
+        ? `页面已先使用占位入口 <code>${htmlEscape(clientConfig.server_address)}</code> 输出；打开后会在当前浏览器网络环境中开始优选。`
         : "未配置优选源，当前为域名直连导出。";
+  const pageData = {
+    candidateUrl: `${base}/preferred-candidates.json`,
+    clientConfig,
+    nodeName: settings.nodeName,
+    publicHost: settings.publicHost,
+  };
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -237,29 +340,307 @@ function renderPage(settings, requestUrl, exportBundle) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Sudoku Pure Worker</title>
   <style>
-    :root { color-scheme: dark; --bg:#081118; --panel:#0d1a24; --line:#234154; --text:#e6f1f5; --muted:#91aab8; --accent:#5fd0ff; }
-    * { box-sizing:border-box; } body { margin:0; font-family:Menlo,Monaco,Consolas,monospace; color:var(--text); background:linear-gradient(180deg,#030608,#081118); }
-    main { max-width:980px; margin:0 auto; padding:28px 18px 48px; } h1 { margin:0 0 10px; font-size:28px; } p { color:var(--muted); line-height:1.6; }
-    .grid { display:grid; gap:18px; margin-top:24px; } .card { background:rgba(13,26,36,.92); border:1px solid var(--line); border-radius:16px; padding:16px; }
-    .label { color:var(--accent); font-size:12px; text-transform:uppercase; letter-spacing:.08em; } pre { margin:10px 0 0; padding:14px; border-radius:12px; overflow:auto; background:#03080d; border:1px solid #173244; }
-    a { color:var(--accent); }
+    :root { color-scheme: dark; --bg:#081118; --panel:#0d1a24; --line:#234154; --text:#e6f1f5; --muted:#91aab8; --accent:#5fd0ff; --ok:#7ddf9b; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:Menlo,Monaco,Consolas,monospace; color:var(--text); background:linear-gradient(180deg,#030608,#081118); }
+    main { width:min(980px,100%); margin:0 auto; padding:28px 18px 48px; }
+    h1 { margin:0 0 10px; font-size:28px; line-height:1.2; }
+    p { color:var(--muted); line-height:1.6; overflow-wrap:anywhere; }
+    .grid { display:grid; gap:18px; margin-top:24px; min-width:0; }
+    .card { min-width:0; background:rgba(13,26,36,.92); border:1px solid var(--line); border-radius:8px; padding:16px; }
+    .head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:10px; }
+    .label { color:var(--accent); font-size:12px; text-transform:uppercase; letter-spacing:.08em; }
+    .copy { appearance:none; border:1px solid var(--line); border-radius:6px; background:#102636; color:var(--text); padding:6px 10px; cursor:pointer; }
+    .copy:hover { border-color:var(--accent); }
+    pre { width:100%; max-width:100%; margin:0; padding:14px; border-radius:8px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; background:#03080d; border:1px solid #173244; }
+    .short { white-space:pre-wrap; word-break:break-all; }
+    .meter { height:8px; border-radius:999px; overflow:hidden; background:#071018; border:1px solid #173244; margin-top:10px; }
+    .meter i { display:block; width:0%; height:100%; background:linear-gradient(90deg,var(--accent),var(--ok)); transition:width .2s ease; }
+    .rank { margin-top:10px; color:var(--muted); font-size:13px; line-height:1.6; overflow-wrap:anywhere; }
+    a { color:var(--accent); overflow-wrap:anywhere; }
   </style>
 </head>
 <body><main>
   <h1>Sudoku Pure Cloudflare Worker</h1>
-  <p>当前实现是纯 Worker 版 Sudoku 服务端。入口固定为 <code>wss://${htmlEscape(settings.publicHost)}${htmlEscape(settings.wsPath)}</code>，当前参数为 <code>ws + tls + ${htmlEscape(settings.aead)} + ${htmlEscape(downlinkMode)}</code>。</p>
+  <p>当前实现是纯 Worker 版 Sudoku 服务端。入口固定为 <code>wss://${htmlEscape(settings.publicHost)}${htmlEscape(settings.wsPath)}</code>，当前参数为 <code>${htmlEscape(settings.httpMaskMode)} + tls + ${htmlEscape(settings.aead)} + ${htmlEscape(downlinkMode)}</code>。</p>
   <p>${exportHint}</p>
-  <p>${preferredMeta}</p>
+  <p id="preferredStatus">${preferredMeta}</p>
+  <div class="meter"><i id="preferredProgress"></i></div>
+  <div id="preferredRank" class="rank"></div>
   <div class="grid">
-    <section class="card"><div class="label">Short Link</div><pre>${htmlEscape(shortLink)}</pre></section>
-    <section class="card"><div class="label">Client JSON</div><pre>${htmlEscape(clientJson)}</pre></section>
-    <section class="card"><div class="label">Clash / Mihomo</div><pre>${htmlEscape(clashNode)}</pre></section>
+    <section class="card"><div class="head"><div class="label">Short Link</div><button class="copy" data-copy-target="shortLink">Copy</button></div><pre id="shortLink" class="short">${htmlEscape(shortLink)}</pre></section>
+    <section class="card"><div class="head"><div class="label">Client JSON</div><button class="copy" data-copy-target="clientJson">Copy</button></div><pre id="clientJson">${htmlEscape(clientJson)}</pre></section>
+    <section class="card"><div class="head"><div class="label">Clash / Mihomo</div><button class="copy" data-copy-target="clashNode">Copy</button></div><pre id="clashNode">${htmlEscape(clashNode)}</pre></section>
     <section class="card"><div class="label">API</div>
       <p><a href="${htmlEscape(base)}/shortlink">${htmlEscape(base)}/shortlink</a></p>
       <p><a href="${htmlEscape(base)}/client.json">${htmlEscape(base)}/client.json</a></p>
       <p><a href="${htmlEscape(base)}/clash.yaml">${htmlEscape(base)}/clash.yaml</a></p>
     </section>
   </div>
+  <script>
+    const SUDOKU_PAGE = ${jsValue(pageData)};
+    const cloneValue = (value) => typeof structuredClone === "function" ? structuredClone(value) : JSON.parse(JSON.stringify(value));
+    let baseConfig = cloneValue(SUDOKU_PAGE.clientConfig);
+
+    function text(id, value) {
+      const node = document.getElementById(id);
+      if (node) node.textContent = value;
+    }
+
+    function setProgress(done, total) {
+      const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+      const bar = document.getElementById("preferredProgress");
+      if (bar) bar.style.width = pct + "%";
+    }
+
+    function splitHostPort(value) {
+      const raw = String(value || "").trim();
+      if (raw.startsWith("[")) {
+        const idx = raw.lastIndexOf("]:");
+        return { host: raw.slice(1, idx), port: Number(raw.slice(idx + 2)) };
+      }
+      const idx = raw.lastIndexOf(":");
+      return { host: raw.slice(0, idx), port: Number(raw.slice(idx + 1)) };
+    }
+
+    function joinHostPort(host, port) {
+      return host.includes(":") && !host.startsWith("[") ? "[" + host + "]:" + port : host + ":" + port;
+    }
+
+    function hostForUrl(host) {
+      return host.includes(":") && !host.startsWith("[") ? "[" + host + "]" : host;
+    }
+
+    function isLiteralIp(host) {
+      return /^(?:\\d{1,3}\\.){3}\\d{1,3}$/.test(host) || host.includes(":");
+    }
+
+    function probeUrl(address) {
+      const parsed = splitHostPort(address);
+      if (isLiteralIp(parsed.host)) {
+        const port = parsed.port === 443 ? 80 : parsed.port;
+        return "http://" + hostForUrl(parsed.host) + (port === 80 ? "" : ":" + port) + "/cdn-cgi/trace";
+      }
+      return "https://" + hostForUrl(parsed.host) + (parsed.port === 443 ? "" : ":" + parsed.port) + "/cdn-cgi/trace";
+    }
+
+    async function fetchWithTimeout(url, timeoutMs) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+      const started = performance.now();
+      try {
+        await fetch(url + (url.includes("?") ? "&" : "?") + "__sudoku_probe=" + Date.now(), {
+          mode: "no-cors",
+          cache: "no-store",
+          signal: controller.signal,
+        });
+        return { ok: true, ms: performance.now() - started };
+      } catch (error) {
+        return { ok: false, ms: performance.now() - started, error: error && error.name || "fetch_error" };
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    async function probeCandidate(candidate, probe) {
+      const samples = [];
+      let failures = 0;
+      const url = probeUrl(candidate.address);
+      for (let i = 0; i < Math.max(1, probe.rounds || 1); i += 1) {
+        const result = await fetchWithTimeout(url + (url.includes("?") ? "&" : "?") + "r=" + i, probe.timeoutMs || 1800);
+        if (result.ok) samples.push(result.ms);
+        else failures += 1;
+      }
+      samples.sort((a, b) => a - b);
+      const avg = samples.length ? samples.reduce((sum, item) => sum + item, 0) / samples.length : Infinity;
+      const p95 = samples.length ? samples[Math.min(samples.length - 1, Math.ceil(samples.length * 0.95) - 1)] : Infinity;
+      const downloadMbps = samples.length ? Math.max(0, 40 - avg / 20) : 0;
+      const metrics = {
+        ...candidate,
+        avgLatencyMs: Number.isFinite(avg) ? Math.round(avg) : Infinity,
+        p95LatencyMs: Number.isFinite(p95) ? Math.round(p95) : Infinity,
+        downloadMbps: Number(downloadMbps.toFixed(2)),
+        failures,
+        rounds: Math.max(1, probe.rounds || 1),
+      };
+      metrics.score = score(metrics);
+      return metrics;
+    }
+
+    function score(result) {
+      if (!result || result.failures >= result.rounds || !Number.isFinite(result.avgLatencyMs)) return 0;
+      const latency = Math.max(1, result.avgLatencyMs || 9999);
+      const p95 = Math.max(latency, result.p95LatencyMs || latency);
+      const mbps = Math.max(0, result.downloadMbps || 0);
+      const reliability = Math.max(0, 1 - (result.failures || 0) * 0.25);
+      return Math.round((160000 / latency + 50000 / p95 + mbps * 40) * reliability);
+    }
+
+    async function mapWithConcurrency(items, concurrency, mapper, onDone) {
+      const results = new Array(items.length);
+      let index = 0;
+      let done = 0;
+      const workers = Array.from({ length: Math.min(Math.max(1, concurrency || 1), items.length) }, async () => {
+        while (index < items.length) {
+          const current = index;
+          index += 1;
+          results[current] = await mapper(items[current], current);
+          done += 1;
+          onDone && onDone(done, items.length);
+        }
+      });
+      await Promise.all(workers);
+      return results;
+    }
+
+    function encodeAscii(mode) {
+      if (mode === "prefer_ascii") return "ascii";
+      if (mode === "prefer_entropy") return "entropy";
+      return mode || "entropy";
+    }
+
+    function toBase64Url(input) {
+      const bytes = new TextEncoder().encode(input);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      }
+      return btoa(binary).replace(/\\+/g, "-").replace(/\\//g, "_").replace(/=+$/g, "");
+    }
+
+    function buildShortLink(config) {
+      const parsed = splitHostPort(config.server_address);
+      const payload = {
+        h: parsed.host,
+        p: parsed.port,
+        k: config.key,
+        a: encodeAscii(config.ascii),
+        e: config.aead,
+        m: config.local_port,
+        ht: config.httpmask && config.httpmask.tls !== false,
+        hm: config.httpmask && config.httpmask.mode || "ws",
+        x: config.enable_pure_downlink === false,
+      };
+      if (config.httpmask && config.httpmask.host) payload.hh = config.httpmask.host;
+      if (config.httpmask && config.httpmask.path_root) payload.hy = config.httpmask.path_root;
+      if (config.httpmask && config.httpmask.multiplex && config.httpmask.multiplex !== "off") payload.hx = config.httpmask.multiplex;
+      return "sudoku://" + toBase64Url(JSON.stringify(payload));
+    }
+
+    function yamlQuote(value) {
+      return JSON.stringify(String(value));
+    }
+
+    function buildClashNode(config, nodeName) {
+      const parsed = splitHostPort(config.server_address);
+      const hm = config.httpmask || {};
+      const lines = [
+        "# sudoku",
+        "- name: " + nodeName,
+        "  type: sudoku",
+        "  server: " + yamlQuote(parsed.host),
+        "  port: " + parsed.port,
+        "  key: " + yamlQuote(config.key),
+        "  aead-method: " + config.aead,
+        "  padding-min: 0",
+        "  padding-max: 0",
+        "  table-type: " + encodeAscii(config.ascii),
+        "  enable-pure-downlink: " + (config.enable_pure_downlink !== false),
+        "  httpmask:",
+        "    disable: " + (hm.disable === true),
+        "    mode: " + (hm.mode || "ws"),
+        "    tls: " + (hm.tls !== false),
+      ];
+      if (hm.host) lines.push("    host: " + yamlQuote(hm.host));
+      lines.push("    multiplex: " + yamlQuote(hm.multiplex || "off"));
+      if (hm.path_root) lines.push("    path-root: " + yamlQuote(hm.path_root));
+      return lines.join("\\n") + "\\n";
+    }
+
+    function renderOutputs(config) {
+      text("shortLink", buildShortLink(config));
+      text("clientJson", JSON.stringify(config, null, 2));
+      text("clashNode", buildClashNode(config, SUDOKU_PAGE.nodeName));
+    }
+
+    function configWithIngress(address) {
+      const next = cloneValue(baseConfig);
+      next.server_address = address;
+      next.httpmask = next.httpmask || {};
+      if (!next.httpmask.host) next.httpmask.host = SUDOKU_PAGE.publicHost;
+      return next;
+    }
+
+    async function runClientPreferred() {
+      try {
+        text("preferredStatus", "正在加载优选候选...");
+        const data = await fetch(SUDOKU_PAGE.candidateUrl, { cache: "no-store" }).then((res) => {
+          if (!res.ok) throw new Error("HTTP " + res.status);
+          return res.json();
+        });
+        if (data.placeholder && data.placeholder.clientConfig) {
+          baseConfig = data.placeholder.clientConfig;
+          renderOutputs(baseConfig);
+        }
+        const probe = data.probe || {};
+        const candidates = (data.candidates || []).slice(0, probe.maxCandidates || 32);
+        if (!probe.enabled || candidates.length === 0) {
+          text("preferredStatus", candidates.length === 0 ? "没有可用优选候选，保留占位入口。" : "已关闭浏览器端优选，保留占位入口。");
+          return;
+        }
+        text("preferredStatus", "正在按当前网络环境优选 0/" + candidates.length + "，当前占位入口 " + baseConfig.server_address);
+        setProgress(0, candidates.length);
+        const results = await mapWithConcurrency(
+          candidates,
+          probe.concurrency || 6,
+          (candidate) => probeCandidate(candidate, probe),
+          (done, total) => {
+            setProgress(done, total);
+            text("preferredStatus", "正在按当前网络环境优选 " + done + "/" + total + "，当前占位入口 " + baseConfig.server_address);
+          },
+        );
+        const ranked = results
+          .filter((item) => item && item.score > 0)
+          .sort((a, b) => b.score - a.score || a.avgLatencyMs - b.avgLatencyMs);
+        if (!ranked.length) {
+          text("preferredStatus", "本轮没有测到可用候选，保留占位入口 " + baseConfig.server_address);
+          return;
+        }
+        const best = ranked[0];
+        renderOutputs(configWithIngress(best.address));
+        text("preferredStatus", "已选择 " + best.address + "，平均 " + best.avgLatencyMs + "ms，P95 " + best.p95LatencyMs + "ms，分数 " + best.score + "。");
+        text("preferredRank", ranked.slice(0, 5).map((item, idx) => "#" + (idx + 1) + " " + item.address + "  " + item.avgLatencyMs + "ms  score=" + item.score).join("\\n"));
+      } catch (error) {
+        text("preferredStatus", "浏览器端优选失败，保留占位入口 " + baseConfig.server_address + "。");
+      }
+    }
+
+    document.addEventListener("click", async (event) => {
+      const button = event.target.closest("[data-copy-target]");
+      if (!button) return;
+      const target = document.getElementById(button.getAttribute("data-copy-target"));
+      if (!target) return;
+      const value = target.textContent || "";
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const input = document.createElement("textarea");
+        input.value = value;
+        input.style.position = "fixed";
+        input.style.left = "-9999px";
+        document.body.appendChild(input);
+        input.select();
+        document.execCommand("copy");
+        input.remove();
+      }
+      const old = button.textContent;
+      button.textContent = "Copied";
+      setTimeout(() => { button.textContent = old; }, 900);
+    });
+
+    renderOutputs(baseConfig);
+    runClientPreferred();
+  </script>
 </main></body></html>`;
 }
 
@@ -744,15 +1125,20 @@ export default {
 
     if (request.method !== "GET") return textResponse("Method Not Allowed", 405);
 
-    const exportBundle = await resolveExportBundle(settings, request);
-
     if (url.pathname === "/") {
       if (settings.manageToken) return textResponse("Sudoku Pure Worker is running.");
-      return new Response(renderPage(settings, request.url, exportBundle), { headers: { "content-type": "text/html; charset=utf-8" } });
+      return new Response(renderPage(settings, request.url, resolvePlaceholderBundle(settings)), { headers: { "content-type": "text/html; charset=utf-8" } });
     }
     if (url.pathname === basePath) {
-      return new Response(renderPage(settings, request.url, exportBundle), { headers: { "content-type": "text/html; charset=utf-8" } });
+      return new Response(renderPage(settings, request.url, resolvePlaceholderBundle(settings)), { headers: { "content-type": "text/html; charset=utf-8" } });
     }
+    if (url.pathname === `${basePath}/preferred-candidates.json`) {
+      const payload = await resolveClientPreferredPayload(settings, request);
+      return new Response(JSON.stringify(payload), { headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
+    }
+
+    const exportBundle = await resolveExportBundle(settings, request);
+
     if (url.pathname === `${basePath}/shortlink`) {
       return textResponse(exportBundle.shortLink);
     }
