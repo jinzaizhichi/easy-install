@@ -19,7 +19,7 @@ Cloudflare Worker 入口部署请看：[README.worker.zh-CN.md](./README.worker.
 
 ## 💻 客户端配置
 
-服务端部署完成后，脚本会输出 **短链接** 和 **Mihomo HTTPS 订阅链接**。桌面端（Windows/macOS/Linux）请统一使用官方 GUI 客户端：[`sudoku-desktop`](https://github.com/SUDOKU-ASCII/sudoku-desktop)。
+服务端部署完成后，脚本会输出 **短链接** 和 **Mihomo HTTPS 订阅链接**。桌面端（Windows/macOS/Linux）请统一使用官方 GUI 客户端：[`sudoku-desktop`](https://github.com/SUDOKU-ASCII/sudoku-desktop)。iOS / iPadOS / Apple TV 可使用 [`Anywhere`](https://github.com/NodePassProject/Anywhere)。
 
 ### 桌面 GUI 客户端（Windows / macOS / Linux）
 
@@ -58,13 +58,57 @@ Cloudflare Worker 入口部署请看：[README.worker.zh-CN.md](./README.worker.
 
 ---
 
+### iOS / iPadOS / Apple TV 客户端 (Anywhere)
+
+Anywhere 是 NodePassProject 的 Apple 平台客户端，源码里已实现 Sudoku 协议、`sudoku://` 短链接解析，以及 Clash/Mihomo 订阅里的 `type: sudoku` 节点解析。
+
+#### 1. 安装
+
+从 [`Anywhere`](https://apps.apple.com/us/app/anywhere-proxy/id6758235178) 进入 App Store 安装。iPhone、iPad 和 Apple TV 使用同一款应用。
+
+#### 2. iPhone / iPad 导入
+
+推荐二选一：
+
+**方法一：导入短链接**
+
+1. 复制安装脚本输出的 `sudoku://...` 短链接
+2. 打开 Anywhere，进入 **Proxies**
+3. 点击 **+**
+4. 选择 **Link**
+5. 粘贴 `sudoku://...`
+6. 点击 **Continue**
+
+**方法二：导入 HTTPS 订阅**
+
+1. 复制安装脚本输出的 `https://.../subscription-xxxx.yaml`
+2. 打开 Anywhere，点击 **Add** / **+**
+3. 选择 **Link**
+4. 粘贴订阅地址
+5. 如果出现 **Link Type** 选择，保持 **Subscription**
+6. 点击 **Continue**
+
+Anywhere 的导入页还支持 **QR Code** 扫码和 **Manual** 手动添加；选择 **Link** 时会自动尝试读取剪贴板里的链接。导入后，在首页选择节点，按中间的电源按钮启动；顶部 **Proxy Mode** 可在 **Rule** 和 **Global** 间切换。
+
+#### 3. Apple TV 导入
+
+1. 打开 Anywhere，进入 **Home** 或 **Proxies**
+2. 选择 **Add a Configuration** / **Add Proxy**
+3. 选择 **Link**
+4. 输入 `sudoku://...` 短链接，或输入 `https://.../subscription-xxxx.yaml` 订阅地址
+5. 如果是 HTTPS 订阅，在 **Link Type** 中选择 **Subscription**
+6. 点击 **Continue**
+7. 回到首页选择导入的节点，按电源按钮连接
+
+Apple TV 版源码里的添加页提供 **Link** 和 **Manual** 两种方式；订阅导入成功后会作为一个订阅分组出现在代理列表中，可在分组上执行更新或删除。
+
+---
+
 ### Android 客户端 (Sudodroid)
 
 #### 1. 下载安装
 
 从 [GitHub Releases](https://github.com/SUDOKU-ASCII/sudoku-android/releases) 下载最新 APK 并安装。
-
-> 💡 如需自行编译，请参考项目的 [README](https://github.com/SUDOKU-ASCII/sudoku-android)。
 
 #### 2. 导入短链接
 
@@ -190,7 +234,7 @@ sudoku://eyJoIjoiMS4yLjMuNCIsInAiOjEwMjMzLC...
 ```
 
 客户端使用方式：
-在桌面 GUI 客户端里导入该 `sudoku://...` 短链接即可（见上方「桌面 GUI 客户端」步骤）。
+在桌面 GUI 客户端或 Anywhere 里导入该 `sudoku://...` 短链接即可（见上方客户端步骤）。
 
 ### 2. Mihomo HTTPS 订阅链接
 
@@ -206,6 +250,7 @@ https://1-2-3-4.sslip.io:8443/subscription-xxxxxxxxxxxx.yaml
 
 导入方式：
 - 在 Mihomo / Clash Meta GUI 中选择「订阅 / Profile / Remote URL」之类入口，粘贴上面的 HTTPS 地址即可。
+- 在 iOS / iPadOS / Apple TV 的 Anywhere 中选择 **Add** / **Link**，粘贴上面的 HTTPS 地址，并保持 **Link Type = Subscription**。
 
 ---
 
@@ -266,7 +311,7 @@ sudo bash -c "$(curl -fsSL https://raw.githubusercontent.com/SUDOKU-ASCII/easy-i
 
 ## 💻 Client Configuration
 
-After server deployment, the script outputs a **short link** and a **Mihomo HTTPS subscription URL**. For desktop use (Windows/macOS/Linux), use the official GUI client: [`sudoku-desktop`](https://github.com/SUDOKU-ASCII/sudoku-desktop).
+After server deployment, the script outputs a **short link** and a **Mihomo HTTPS subscription URL**. For desktop use (Windows/macOS/Linux), use the official GUI client: [`sudoku-desktop`](https://github.com/SUDOKU-ASCII/sudoku-desktop). For iOS / iPadOS / Apple TV, use [`Anywhere`](https://github.com/NodePassProject/Anywhere).
 
 ### Desktop GUI Client (Windows / macOS / Linux)
 
@@ -302,6 +347,52 @@ Default local endpoint is still `127.0.0.1:10233` (unless you changed `localPort
   xattr -cr "/Applications/sudoku4x4.app"
   ```
 - macOS / Linux: starting/stopping `TUN` may trigger a password prompt; this is expected.
+
+---
+
+### iOS / iPadOS / Apple TV Client (Anywhere)
+
+Anywhere is NodePassProject's Apple-platform client. Its source includes native Sudoku protocol support, `sudoku://` short-link parsing, and Clash/Mihomo `type: sudoku` subscription parsing.
+
+#### 1. Install
+
+Install Anywhere from the App Store link on the [`Anywhere`](https://github.com/NodePassProject/Anywhere) project page. The same app family covers iPhone, iPad, and Apple TV.
+
+#### 2. Import on iPhone / iPad
+
+Use either method:
+
+**Option 1: Import Short Link**
+
+1. Copy the generated `sudoku://...` short link
+2. Open Anywhere and go to **Home** or **Proxies**
+3. Tap **Add** / **+**
+4. Select **Link**
+5. Paste `sudoku://...`
+6. Tap **Continue**
+
+**Option 2: Import HTTPS Subscription**
+
+1. Copy the generated `https://.../subscription-xxxx.yaml` URL
+2. Open Anywhere and tap **Add** / **+**
+3. Select **Link**
+4. Paste the subscription URL
+5. If **Link Type** appears, keep **Subscription**
+6. Tap **Continue**
+
+The add sheet also supports **QR Code** scanning and **Manual** entry. When **Link** is selected, Anywhere tries to prefill from the clipboard. After import, select the node on Home and tap the center power button to connect; **Proxy Mode** can be switched between **Rule** and **Global**.
+
+#### 3. Import on Apple TV
+
+1. Open Anywhere and go to **Home** or **Proxies**
+2. Choose **Add a Configuration** / **Add Proxy**
+3. Select **Link**
+4. Enter the `sudoku://...` short link, or enter the `https://.../subscription-xxxx.yaml` subscription URL
+5. For an HTTPS subscription, set **Link Type** to **Subscription**
+6. Click **Continue**
+7. Return to Home, select the imported node, and press the power button to connect
+
+The Apple TV add screen provides **Link** and **Manual** modes. A successful subscription import appears as a subscription group in the proxy list, where it can be updated or removed.
 
 ---
 
@@ -433,7 +524,7 @@ sudoku://eyJoIjoiMS4yLjMuNCIsInAiOjEwMjMzLC...
 ```
 
 Client usage:
-Import this `sudoku://...` short link in the desktop GUI client (see "Desktop GUI Client" above).
+Import this `sudoku://...` short link in the desktop GUI client or Anywhere (see client sections above).
 
 ### 2. Mihomo HTTPS Subscription URL
 
@@ -447,7 +538,7 @@ Behavior:
 - The generated profile keeps a single `Proxy` group only; the template `Auto` group is removed.
 - If `SUDOKU_SUBSCRIPTION_TEMPLATE_URL` is unset, the script uses a built-in template so private template URLs are never baked into the code.
 
-Import this URL in your Mihomo / Clash Meta GUI as a remote profile / subscription.
+Import this URL in your Mihomo / Clash Meta GUI as a remote profile / subscription. In Anywhere on iOS / iPadOS / Apple TV, choose **Add** / **Link**, paste this HTTPS URL, and keep **Link Type = Subscription**.
 
 ---
 
