@@ -1,7 +1,6 @@
 import { connect } from "cloudflare:sockets";
 
 import { buildClientConfig, buildClashNode, buildShortLinkFromClientConfig, buildWSPath, resolvePathRoot } from "./sudoku-config.mjs";
-import { classifyPreferredEntry, comparePreferredEntries, filterPreferredEntries, loadPreferredIpPool, normalizePreferredIpStrategy, parsePreferredIpList, pickPreferredEntryWithProbe } from "./preferred-ip.mjs";
 import { PackedDownlinkEncoder } from "./sudoku-packed.mjs";
 import {
   ByteQueue,
@@ -58,36 +57,6 @@ function normalizeHttpMaskMode(value) {
   throw new Error(`invalid httpmask mode: ${value}`);
 }
 
-function detectPreferredRegion(request) {
-  const country = String(request.cf?.country || request.headers.get("cf-ipcountry") || "").trim().toUpperCase();
-  const countryToRegion = {
-    US: "US",
-    SG: "SG",
-    JP: "JP",
-    KR: "KR",
-    DE: "DE",
-    SE: "SE",
-    NL: "NL",
-    FI: "FI",
-    GB: "GB",
-    CN: "SG",
-    TW: "JP",
-    AU: "SG",
-    CA: "US",
-    FR: "DE",
-    IT: "DE",
-    ES: "DE",
-    CH: "DE",
-    AT: "DE",
-    BE: "NL",
-    DK: "SE",
-    NO: "SE",
-    IE: "GB",
-    HK: "HK",
-  };
-  return countryToRegion[country] || "";
-}
-
 async function loadSettings(env, requestUrl) {
   const url = new URL(requestUrl);
   const publicHost = String(env.SUDOKU_PUBLIC_HOST || url.hostname).trim();
@@ -102,20 +71,6 @@ async function loadSettings(env, requestUrl) {
   const enablePureDownlink = parseBoolean(env.SUDOKU_ENABLE_PURE_DOWNLINK, false);
   const httpMaskMode = normalizeHttpMaskMode(env.SUDOKU_CLIENT_HTTP_MASK_MODE || env.SUDOKU_HTTP_MASK_MODE || "ws");
   const httpMaskMultiplex = normalizeMultiplexMode(env.SUDOKU_HTTP_MASK_MULTIPLEX || "off");
-  const preferredIpStrategy = normalizePreferredIpStrategy(env.SUDOKU_PREFERRED_IP_STRATEGY || env.SUDOKU_YX_STRATEGY || "best");
-  const preferredRegion = String(env.SUDOKU_PREFERRED_REGION || env.SUDOKU_WK || "").trim().toUpperCase();
-  const disablePreferred = parseBoolean(env.SUDOKU_DISABLE_PREFERRED || env.SUDOKU_YXBY, false);
-  const enablePreferredIPs = parseBoolean(env.SUDOKU_ENABLE_PREFERRED_IP || env.SUDOKU_EPI, true);
-  const enablePreferredDomains = parseBoolean(env.SUDOKU_ENABLE_PREFERRED_DOMAIN || env.SUDOKU_EPD, true);
-  const preferredIpCacheMs = Math.max(0, Number.parseInt(String(env.SUDOKU_PREFERRED_IP_CACHE_MS || env.SUDOKU_YX_CACHE_MS || "60000"), 10) || 0);
-  const enableBuiltInPreferred = parseBoolean(env.SUDOKU_ENABLE_BUILTIN_PREFERRED ?? env.SUDOKU_EGI, true);
-  const enablePreferredProbe = parseBoolean(env.SUDOKU_ENABLE_PREFERRED_PROBE ?? env.SUDOKU_YX_PROBE, true);
-  const preferredProbeRounds = Math.max(1, Math.min(5, Number.parseInt(String(env.SUDOKU_PREFERRED_PROBE_ROUNDS || env.SUDOKU_YX_ROUNDS || "2"), 10) || 2));
-  const preferredProbeTimeoutMs = Math.max(300, Math.min(8000, Number.parseInt(String(env.SUDOKU_PREFERRED_PROBE_TIMEOUT_MS || env.SUDOKU_YX_TIMEOUT_MS || "1800"), 10) || 1800));
-  const preferredProbeMax = Math.max(1, Math.min(64, Number.parseInt(String(env.SUDOKU_PREFERRED_PROBE_MAX || env.SUDOKU_YX_PROBE_MAX || "16"), 10) || 16));
-  const preferredProbeConcurrency = Math.max(1, Math.min(16, Number.parseInt(String(env.SUDOKU_PREFERRED_PROBE_CONCURRENCY || env.SUDOKU_YX_PROBE_CONCURRENCY || "6"), 10) || 6));
-  const preferredProbeCacheMs = Math.max(0, Math.min(3600000, Number.parseInt(String(env.SUDOKU_PREFERRED_PROBE_CACHE_MS || env.SUDOKU_YX_PROBE_CACHE_MS || "300000"), 10) || 300000));
-  const preferredClientProbeMax = Math.max(1, Math.min(256, Number.parseInt(String(env.SUDOKU_CLIENT_PREFERRED_PROBE_MAX || env.SUDOKU_YX_CLIENT_PROBE_MAX || env.SUDOKU_PREFERRED_PROBE_MAX || env.SUDOKU_YX_PROBE_MAX || "32"), 10) || 32));
   const placeholderServerAddress = String(env.SUDOKU_PLACEHOLDER_SERVER_ADDRESS || env.SUDOKU_PREFERRED_PLACEHOLDER || env.SUDOKU_YX_PLACEHOLDER || "cf.877774.xyz").trim() || "cf.877774.xyz";
   const uplinkTable = await buildSudokuTable(sharedKey, ascii, customTable);
   const downlinkTable = oppositeDirection(uplinkTable);
@@ -131,25 +86,8 @@ async function loadSettings(env, requestUrl) {
     httpMaskMode,
     httpMaskMultiplex,
     httpMaskHost: String(env.SUDOKU_HTTP_MASK_HOST || "").trim(),
-    preferredIpInline: String(env.SUDOKU_PREFERRED_IPS || env.SUDOKU_YX || "").trim(),
-    preferredIpUrl: String(env.SUDOKU_PREFERRED_IP_URL || env.SUDOKU_YX_URL || "").trim(),
-    preferredIpStrategy,
-    preferredRegion,
-    disablePreferred,
-    enablePreferredIPs,
-    enablePreferredDomains,
-    preferredIpCacheMs,
-    enableBuiltInPreferred,
-    enablePreferredProbe,
-    preferredProbeRounds,
-    preferredProbeTimeoutMs,
-    preferredProbeMax,
-    preferredProbeConcurrency,
-    preferredProbeCacheMs,
-    preferredClientProbeMax,
     placeholderServerAddress,
-    preferredKv: env.C || env.SUDOKU_KV || null,
-    preferredKvKey: String(env.SUDOKU_PREFERRED_IP_KV_KEY || "sudoku:preferred_ips").trim() || "sudoku:preferred_ips",
+    preferredSourceUrl: "https://ip.164746.xyz/",
     nodeName: String(env.SUDOKU_NODE_NAME || "sudoku-cf-worker-pure").trim() || "sudoku-cf-worker-pure",
     wsPath: buildWSPath(pathRoot),
     pathRoot,
@@ -163,30 +101,8 @@ function configBase(origin, manageToken) {
   return manageToken ? `${origin}/${manageToken}` : origin;
 }
 
-async function resolvePreferredEntries(settings, request) {
-  const preferredPool = await loadPreferredIpPool({
-    inlineList: settings.preferredIpInline,
-    sourceUrl: settings.preferredIpUrl,
-    defaultPort: 443,
-    cacheTtlMs: settings.preferredIpCacheMs,
-    kv: settings.preferredKv,
-    kvKey: settings.preferredKvKey,
-    defaultEntries: [],
-    enableBuiltIn: settings.enableBuiltInPreferred,
-  });
-  const effectiveRegion = settings.preferredRegion || detectPreferredRegion(request);
-  const eligibleEntries = settings.disablePreferred
-    ? []
-    : filterPreferredEntries(preferredPool.entries, {
-        enableIPs: settings.enablePreferredIPs,
-        enableDomains: settings.enablePreferredDomains,
-        region: effectiveRegion,
-      });
-  return { preferredPool, eligibleEntries, effectiveRegion };
-}
-
-function buildExportArtifacts(settings, selectedPreferred = null, options = {}) {
-  const serverAddress = selectedPreferred?.address || options.serverAddress || "";
+function buildExportArtifacts(settings, options = {}) {
+  const serverAddress = options.serverAddress || "";
   const externalIngress = Boolean(serverAddress);
   const clientConfig = buildClientConfig({
     publicHost: settings.publicHost,
@@ -210,14 +126,7 @@ function buildExportArtifacts(settings, selectedPreferred = null, options = {}) 
 
 function resolvePlaceholderBundle(settings) {
   return {
-    ...buildExportArtifacts(settings, null, { serverAddress: settings.placeholderServerAddress }),
-    selectedPreferred: null,
-    preferredCount: 0,
-    preferredTotalCount: 0,
-    preferredSource: "",
-    preferredError: "",
-    effectiveRegion: "",
-    preferredProbeEnabled: settings.enablePreferredProbe,
+    ...buildExportArtifacts(settings, { serverAddress: settings.placeholderServerAddress }),
     isPlaceholder: true,
   };
 }
@@ -226,112 +135,23 @@ function jsValue(value) {
   return JSON.stringify(value).replace(/</g, "\\u003c");
 }
 
-async function resolveExportBundle(settings, request) {
-  const { preferredPool, eligibleEntries, effectiveRegion } = await resolvePreferredEntries(settings, request);
-  const selectedPreferred = await pickPreferredEntryWithProbe(
-    eligibleEntries,
-    settings.preferredIpStrategy,
-    `${request.headers.get("cf-connecting-ip") || ""}|${request.headers.get("user-agent") || ""}`,
-    {
-      enabled: settings.enablePreferredProbe,
-      rounds: settings.preferredProbeRounds,
-      timeoutMs: settings.preferredProbeTimeoutMs,
-      maxCandidates: settings.preferredProbeMax,
-      concurrency: settings.preferredProbeConcurrency,
-      cacheTtlMs: settings.preferredProbeCacheMs,
-    },
-  );
-  return {
-    ...buildExportArtifacts(settings, selectedPreferred),
-    selectedPreferred,
-    preferredCount: eligibleEntries.length,
-    preferredTotalCount: preferredPool.entries.length,
-    preferredSource: preferredPool.preferredSource,
-    preferredError: preferredPool.preferredError,
-    effectiveRegion,
-    preferredProbeEnabled: settings.enablePreferredProbe,
-  };
-}
-
-async function resolveClientPreferredPayload(settings, request) {
-  const { preferredPool, eligibleEntries, effectiveRegion } = await resolvePreferredEntries(settings, request);
-  const placeholder = resolvePlaceholderBundle(settings);
-  const sortedEntries = [...eligibleEntries].sort(comparePreferredEntries);
-  const sortedDomainEntries = sortedEntries.filter((entry) => classifyPreferredEntry(entry) === "domain");
-  const domainQuota = Math.min(8, Math.ceil(settings.preferredClientProbeMax / 4));
-  let domainEntries = sortedDomainEntries.slice(0, domainQuota);
-  const ipEntries = sortedEntries.filter((entry) => classifyPreferredEntry(entry) === "ip").slice(0, settings.preferredClientProbeMax - domainEntries.length);
-  if (ipEntries.length + domainEntries.length < settings.preferredClientProbeMax) {
-    domainEntries = domainEntries.concat(sortedDomainEntries.slice(domainEntries.length, settings.preferredClientProbeMax - ipEntries.length));
-  }
-  const seenCandidates = new Set();
-  const candidates = [...ipEntries, ...domainEntries]
-    .filter((entry) => {
-      if (seenCandidates.has(entry.address)) return false;
-      seenCandidates.add(entry.address);
-      return true;
-    })
-    .map((entry) => ({
-      address: entry.address,
-      name: entry.name || "",
-      latencyMs: entry.latencyMs,
-      downloadMbps: entry.downloadMbps,
-      score: entry.score,
-      sourceIndex: entry.sourceIndex || 0,
-    }));
-  return {
-    placeholder: {
-      clientConfig: placeholder.clientConfig,
-      shortLink: placeholder.shortLink,
-      clashNode: placeholder.clashNode,
-    },
-    candidates,
-    preferredCount: eligibleEntries.length,
-    preferredTotalCount: preferredPool.entries.length,
-    preferredSource: preferredPool.preferredSource,
-    preferredError: preferredPool.preferredError,
-    effectiveRegion,
-    publicHost: settings.publicHost,
-    nodeName: settings.nodeName,
-    probe: {
-      enabled: settings.enablePreferredProbe,
-      rounds: settings.preferredProbeRounds,
-      timeoutMs: settings.preferredProbeTimeoutMs,
-      maxCandidates: settings.preferredClientProbeMax,
-      concurrency: settings.preferredProbeConcurrency,
-    },
-  };
+async function resolveExportBundle(settings) {
+  return resolvePlaceholderBundle(settings);
 }
 
 function renderPage(settings, requestUrl, exportBundle) {
-  const { clientConfig, clashNode, shortLink, selectedPreferred, preferredCount, preferredTotalCount, preferredSource, preferredError, effectiveRegion, preferredProbeEnabled } = exportBundle;
+  const { clientConfig, clashNode, shortLink } = exportBundle;
   const clientJson = JSON.stringify(clientConfig, null, 2);
   const url = new URL(requestUrl);
   const base = configBase(url.origin, settings.manageToken);
   const downlinkMode = settings.enablePureDownlink ? "pure_downlink" : "packed_downlink";
-  const exportTarget = selectedPreferred ? `${selectedPreferred.address}${selectedPreferred.name ? ` (${selectedPreferred.name})` : ""}` : `${settings.publicHost}:443`;
-  const exportHint = exportBundle.isPlaceholder
-    ? `当前先使用占位入口 <code>${htmlEscape(clientConfig.server_address)}</code> 输出配置，页面加载后会按访问者当前网络优选并替换。`
-    : selectedPreferred
-    ? `当前导出节点使用优选入口 <code>${htmlEscape(exportTarget)}</code>，并自动把 <code>Host/SNI</code> 设为 <code>${htmlEscape(clientConfig.httpmask.host || settings.publicHost)}</code>。`
-    : "当前导出节点直接使用你的域名作为入口。";
-  const probeMeta = selectedPreferred?.probe
-    ? `，探测 <code>${htmlEscape(selectedPreferred.probe.rounds)}x</code>，平均 <code>${htmlEscape(selectedPreferred.probe.latencyMs ?? "-")}ms</code>，P95 <code>${htmlEscape(selectedPreferred.probe.p95LatencyMs)}ms</code>，估算 <code>${htmlEscape(selectedPreferred.probe.downloadMbps)}Mbps</code>，分数 <code>${htmlEscape(selectedPreferred.score)}</code>`
-    : preferredProbeEnabled
-      ? "，主动探测无可用结果，已按静态分数回退"
-      : "";
-  const preferredMeta = preferredCount > 0
-    ? `优选池可用 ${preferredCount} 条 / 总计 ${preferredTotalCount} 条，策略 <code>${htmlEscape(settings.preferredIpStrategy)}</code>${effectiveRegion ? `，地区过滤 <code>${htmlEscape(effectiveRegion)}</code>` : ""}${preferredSource ? `，来源 <code>${htmlEscape(preferredSource)}</code>` : ""}${probeMeta}。`
-    : preferredError
-      ? `优选池不可用，已回退到域名直连。错误：<code>${htmlEscape(preferredError)}</code>`
-      : settings.enableBuiltInPreferred
-        ? `页面已先使用占位入口 <code>${htmlEscape(clientConfig.server_address)}</code> 输出；打开后会在当前浏览器网络环境中开始优选。`
-        : "未配置优选源，当前为域名直连导出。";
+  const exportHint = `当前先使用占位入口 <code>${htmlEscape(clientConfig.server_address)}</code> 输出配置，页面加载后会从 <code>${htmlEscape(settings.preferredSourceUrl)}</code> 读取第一个结果并替换。`;
+  const preferredMeta = `等待页面加载后获取固定优选入口，Host/SNI 仍使用 <code>${htmlEscape(clientConfig.httpmask.host || settings.publicHost)}</code>。`;
   const pageData = {
-    candidateUrl: `${base}/preferred-candidates.json`,
     clientConfig,
     nodeName: settings.nodeName,
     publicHost: settings.publicHost,
+    preferredSourceUrl: settings.preferredSourceUrl,
   };
   return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -387,8 +207,7 @@ function renderPage(settings, requestUrl, exportBundle) {
       if (node) node.textContent = value;
     }
 
-    function setProgress(done, total) {
-      const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    function setProgress(pct) {
       const bar = document.getElementById("preferredProgress");
       if (bar) bar.style.width = pct + "%";
     }
@@ -407,90 +226,32 @@ function renderPage(settings, requestUrl, exportBundle) {
       return host.includes(":") && !host.startsWith("[") ? "[" + host + "]:" + port : host + ":" + port;
     }
 
-    function hostForUrl(host) {
-      return host.includes(":") && !host.startsWith("[") ? "[" + host + "]" : host;
+    function normalizePreferredAddress(value) {
+      let raw = String(value || "").trim();
+      if (!raw) return "";
+      raw = raw.replace(/^https?:\\/\\//i, "").split(/[/?#]/)[0].trim();
+      if (!raw) return "";
+      if (raw.startsWith("[")) return raw.includes("]:") ? raw : raw + ":443";
+      const colonCount = (raw.match(/:/g) || []).length;
+      if (colonCount === 0) return joinHostPort(raw, 443);
+      if (colonCount === 1 && /:\\d+$/.test(raw)) return raw;
+      return joinHostPort(raw.replace(/^\\[|\\]$/g, ""), 443);
     }
 
-    function isLiteralIp(host) {
-      return /^(?:\\d{1,3}\\.){3}\\d{1,3}$/.test(host) || host.includes(":");
-    }
-
-    function probeUrl(address) {
-      const parsed = splitHostPort(address);
-      if (isLiteralIp(parsed.host)) {
-        const port = parsed.port === 443 ? 80 : parsed.port;
-        return "http://" + hostForUrl(parsed.host) + (port === 80 ? "" : ":" + port) + "/cdn-cgi/trace";
+    function firstPreferredAddressFromHtml(html) {
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const candidates = [];
+      const firstTableLink = doc.querySelector("td.recommended a, table tbody tr td a, table tr td a");
+      if (firstTableLink) candidates.push(firstTableLink.textContent || "");
+      const copyMatch = html.match(/copyIP\\(['"]([^'"]+)['"]\\)/);
+      if (copyMatch) candidates.push(copyMatch[1]);
+      const ipMatch = html.match(/\\b(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)(?:\\.(?:25[0-5]|2[0-4]\\d|1?\\d?\\d)){3}(?::\\d{1,5})?\\b/);
+      if (ipMatch) candidates.push(ipMatch[0]);
+      for (const candidate of candidates) {
+        const address = normalizePreferredAddress(candidate);
+        if (address) return address;
       }
-      return "https://" + hostForUrl(parsed.host) + (parsed.port === 443 ? "" : ":" + parsed.port) + "/cdn-cgi/trace";
-    }
-
-    async function fetchWithTimeout(url, timeoutMs) {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      const started = performance.now();
-      try {
-        await fetch(url + (url.includes("?") ? "&" : "?") + "__sudoku_probe=" + Date.now(), {
-          mode: "no-cors",
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        return { ok: true, ms: performance.now() - started };
-      } catch (error) {
-        return { ok: false, ms: performance.now() - started, error: error && error.name || "fetch_error" };
-      } finally {
-        clearTimeout(timer);
-      }
-    }
-
-    async function probeCandidate(candidate, probe) {
-      const samples = [];
-      let failures = 0;
-      const url = probeUrl(candidate.address);
-      for (let i = 0; i < Math.max(1, probe.rounds || 1); i += 1) {
-        const result = await fetchWithTimeout(url + (url.includes("?") ? "&" : "?") + "r=" + i, probe.timeoutMs || 1800);
-        if (result.ok) samples.push(result.ms);
-        else failures += 1;
-      }
-      samples.sort((a, b) => a - b);
-      const avg = samples.length ? samples.reduce((sum, item) => sum + item, 0) / samples.length : Infinity;
-      const p95 = samples.length ? samples[Math.min(samples.length - 1, Math.ceil(samples.length * 0.95) - 1)] : Infinity;
-      const downloadMbps = samples.length ? Math.max(0, 40 - avg / 20) : 0;
-      const metrics = {
-        ...candidate,
-        avgLatencyMs: Number.isFinite(avg) ? Math.round(avg) : Infinity,
-        p95LatencyMs: Number.isFinite(p95) ? Math.round(p95) : Infinity,
-        downloadMbps: Number(downloadMbps.toFixed(2)),
-        failures,
-        rounds: Math.max(1, probe.rounds || 1),
-      };
-      metrics.score = score(metrics);
-      return metrics;
-    }
-
-    function score(result) {
-      if (!result || result.failures >= result.rounds || !Number.isFinite(result.avgLatencyMs)) return 0;
-      const latency = Math.max(1, result.avgLatencyMs || 9999);
-      const p95 = Math.max(latency, result.p95LatencyMs || latency);
-      const mbps = Math.max(0, result.downloadMbps || 0);
-      const reliability = Math.max(0, 1 - (result.failures || 0) * 0.25);
-      return Math.round((160000 / latency + 50000 / p95 + mbps * 40) * reliability);
-    }
-
-    async function mapWithConcurrency(items, concurrency, mapper, onDone) {
-      const results = new Array(items.length);
-      let index = 0;
-      let done = 0;
-      const workers = Array.from({ length: Math.min(Math.max(1, concurrency || 1), items.length) }, async () => {
-        while (index < items.length) {
-          const current = index;
-          index += 1;
-          results[current] = await mapper(items[current], current);
-          done += 1;
-          onDone && onDone(done, items.length);
-        }
-      });
-      await Promise.all(workers);
-      return results;
+      return "";
     }
 
     function encodeAscii(mode) {
@@ -573,45 +334,26 @@ function renderPage(settings, requestUrl, exportBundle) {
 
     async function runClientPreferred() {
       try {
-        text("preferredStatus", "正在加载优选候选...");
-        const data = await fetch(SUDOKU_PAGE.candidateUrl, { cache: "no-store" }).then((res) => {
+        text("preferredStatus", "正在从 " + SUDOKU_PAGE.preferredSourceUrl + " 获取第一个优选入口...");
+        setProgress(20);
+        const html = await fetch(SUDOKU_PAGE.preferredSourceUrl, { cache: "no-store" }).then((res) => {
           if (!res.ok) throw new Error("HTTP " + res.status);
-          return res.json();
+          return res.text();
         });
-        if (data.placeholder && data.placeholder.clientConfig) {
-          baseConfig = data.placeholder.clientConfig;
-          renderOutputs(baseConfig);
-        }
-        const probe = data.probe || {};
-        const candidates = (data.candidates || []).slice(0, probe.maxCandidates || 32);
-        if (!probe.enabled || candidates.length === 0) {
-          text("preferredStatus", candidates.length === 0 ? "没有可用优选候选，保留占位入口。" : "已关闭浏览器端优选，保留占位入口。");
+        setProgress(70);
+        const address = firstPreferredAddressFromHtml(html);
+        if (!address) {
+          text("preferredStatus", "没有解析到可用入口，保留占位入口 " + baseConfig.server_address + "。");
+          setProgress(0);
           return;
         }
-        text("preferredStatus", "正在按当前网络环境优选 0/" + candidates.length + "，当前占位入口 " + baseConfig.server_address);
-        setProgress(0, candidates.length);
-        const results = await mapWithConcurrency(
-          candidates,
-          probe.concurrency || 6,
-          (candidate) => probeCandidate(candidate, probe),
-          (done, total) => {
-            setProgress(done, total);
-            text("preferredStatus", "正在按当前网络环境优选 " + done + "/" + total + "，当前占位入口 " + baseConfig.server_address);
-          },
-        );
-        const ranked = results
-          .filter((item) => item && item.score > 0)
-          .sort((a, b) => b.score - a.score || a.avgLatencyMs - b.avgLatencyMs);
-        if (!ranked.length) {
-          text("preferredStatus", "本轮没有测到可用候选，保留占位入口 " + baseConfig.server_address);
-          return;
-        }
-        const best = ranked[0];
-        renderOutputs(configWithIngress(best.address));
-        text("preferredStatus", "已选择 " + best.address + "，平均 " + best.avgLatencyMs + "ms，P95 " + best.p95LatencyMs + "ms，分数 " + best.score + "。");
-        text("preferredRank", ranked.slice(0, 5).map((item, idx) => "#" + (idx + 1) + " " + item.address + "  " + item.avgLatencyMs + "ms  score=" + item.score).join("\\n"));
+        renderOutputs(configWithIngress(address));
+        setProgress(100);
+        text("preferredStatus", "已使用第一个优选入口 " + address + "。");
+        text("preferredRank", "");
       } catch (error) {
-        text("preferredStatus", "浏览器端优选失败，保留占位入口 " + baseConfig.server_address + "。");
+        setProgress(0);
+        text("preferredStatus", "获取固定优选入口失败，保留占位入口 " + baseConfig.server_address + "。");
       }
     }
 
@@ -639,7 +381,7 @@ function renderPage(settings, requestUrl, exportBundle) {
     });
 
     renderOutputs(baseConfig);
-    runClientPreferred();
+    window.addEventListener("load", runClientPreferred, { once: true });
   </script>
 </main></body></html>`;
 }
@@ -1038,50 +780,6 @@ async function prepareEarlyUpgrade(settings, url) {
   };
 }
 
-async function handlePreferredIpApi(settings, request, url, basePath) {
-  const apiPath = `${basePath}/api/preferred-ips`;
-  if (url.pathname !== apiPath) return null;
-  if (!settings.manageToken) return textResponse("Forbidden", 403);
-  if (!settings.preferredKv || !settings.preferredKvKey) {
-    return textResponse("Preferred IP KV is not configured. Bind KV namespace as variable C or set SUDOKU_KV.", 501);
-  }
-
-  if (request.method === "GET") {
-    const stored = (await settings.preferredKv.get(settings.preferredKvKey, "text")) || "";
-    const entries = parsePreferredIpList(stored, 443);
-    return new Response(JSON.stringify({ entries, raw: stored }, null, 2), { headers: { "content-type": "application/json; charset=utf-8" } });
-  }
-
-  if (request.method === "DELETE") {
-    await settings.preferredKv.delete(settings.preferredKvKey);
-    return new Response(JSON.stringify({ ok: true, cleared: true }), { headers: { "content-type": "application/json; charset=utf-8" } });
-  }
-
-  if (request.method === "POST" || request.method === "PUT") {
-    const contentType = request.headers.get("content-type") || "";
-    const rawBody = await request.text();
-    let nextRaw = rawBody;
-    if (contentType.includes("application/json")) {
-      const payload = JSON.parse(rawBody || "{}");
-      if (Array.isArray(payload)) {
-        nextRaw = payload.join("\n");
-      } else if (Array.isArray(payload.entries)) {
-        nextRaw = payload.entries
-          .map((entry) => (typeof entry === "string" ? entry : entry?.address ? `${entry.address}${entry.name ? `#${entry.name}` : ""}` : ""))
-          .filter(Boolean)
-          .join("\n");
-      } else if (typeof payload.raw === "string") {
-        nextRaw = payload.raw;
-      }
-    }
-    const entries = parsePreferredIpList(nextRaw, 443);
-    await settings.preferredKv.put(settings.preferredKvKey, entries.map((entry) => `${entry.address}${entry.name ? `#${entry.name}` : ""}`).join("\n"));
-    return new Response(JSON.stringify({ ok: true, count: entries.length, entries }, null, 2), { headers: { "content-type": "application/json; charset=utf-8" } });
-  }
-
-  return textResponse("Method Not Allowed", 405);
-}
-
 export default {
   async fetch(request, env) {
     let settings;
@@ -1120,9 +818,6 @@ export default {
       return new Response(null, { status: 101, webSocket: client, headers });
     }
 
-    const apiResponse = await handlePreferredIpApi(settings, request, url, basePath);
-    if (apiResponse) return apiResponse;
-
     if (request.method !== "GET") return textResponse("Method Not Allowed", 405);
 
     if (url.pathname === "/") {
@@ -1132,11 +827,6 @@ export default {
     if (url.pathname === basePath) {
       return new Response(renderPage(settings, request.url, resolvePlaceholderBundle(settings)), { headers: { "content-type": "text/html; charset=utf-8" } });
     }
-    if (url.pathname === `${basePath}/preferred-candidates.json`) {
-      const payload = await resolveClientPreferredPayload(settings, request);
-      return new Response(JSON.stringify(payload), { headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" } });
-    }
-
     const exportBundle = await resolveExportBundle(settings, request);
 
     if (url.pathname === `${basePath}/shortlink`) {
