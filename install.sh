@@ -30,6 +30,7 @@
 #   SUDOKU_SUBSCRIPTION_NODE_NAME - Node name used inside generated Mihomo subscription (default: sudoku)
 #   SUDOKU_SUBSCRIPTION_TEMPLATE_URL - Optional remote YAML template used as the subscription base
 #   SUDOKU_ACME_EMAIL - ACME account email used for certificate issuance (default: admin@<subscription-domain>)
+#   SUDOKU_WARP     - Serve Sudoku with sudoku-sing-box and route all proxied traffic through WARP (default: false)
 #
 
 set -e
@@ -64,6 +65,7 @@ SUDOKU_SUBSCRIPTION_PATH="${SUDOKU_SUBSCRIPTION_PATH:-}"
 SUDOKU_SUBSCRIPTION_NODE_NAME="${SUDOKU_SUBSCRIPTION_NODE_NAME:-sudoku}"
 SUDOKU_SUBSCRIPTION_TEMPLATE_URL="${SUDOKU_SUBSCRIPTION_TEMPLATE_URL:-}"
 SUDOKU_ACME_EMAIL="${SUDOKU_ACME_EMAIL:-}"
+SUDOKU_WARP="${SUDOKU_WARP:-${SUDOKU_WARP_GOOGLE:-false}}"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/sudoku"
 EXPORT_STATE_FILE="${CONFIG_DIR}/export-state.env"
@@ -81,6 +83,12 @@ SUBSCRIPTION_SERVER_CONFIG="${SUBSCRIPTION_LIB_DIR}/server.json"
 SUBSCRIPTION_RENEW_SCRIPT="${SUBSCRIPTION_LIB_DIR}/renew-cert.sh"
 ACME_HOME="/root/.acme.sh"
 ACME_BIN="${ACME_HOME}/acme.sh"
+SING_BOX_SERVICE_NAME="sudoku-sing-box"
+SING_BOX_CONFIG_DIR="/etc/sing-box"
+SING_BOX_CONFIG_FILE="${SING_BOX_CONFIG_DIR}/sudoku-warp.json"
+SING_BOX_CACHE_DIR="/var/lib/sudoku-sing-box"
+SUDOKU_WARP_DIR="${CONFIG_DIR}/warp"
+SUDOKU_WARP_PROFILE="${SUDOKU_WARP_DIR}/wgcf-profile.conf"
 DEFAULT_ASCII_MODE="up_ascii_down_entropy"
 CUSTOM_TABLE=""
 DISABLE_HTTP_MASK="false"
@@ -110,6 +118,7 @@ ACME_EMAIL=""
 ACME_STOPPED_SERVICES=""
 PKG_MANAGER=""
 SUDOKU_CORE_READY="false"
+WARP_ENABLED="false"
 SUBSCRIPTION_SETUP_ENABLED="true"
 SUBSCRIPTION_DISABLED_REASON=""
 NONFATAL_ISSUES=()
@@ -254,6 +263,7 @@ normalize_settings() {
     local http_mask_tls
     local cf_fallback_enabled
     local cf_fallback_force
+    local warp_enabled
 
     if ! http_mask_enabled=$(normalize_bool "${SUDOKU_HTTP_MASK}"); then
         error "Invalid SUDOKU_HTTP_MASK=${SUDOKU_HTTP_MASK} (expected true/false)"
@@ -266,6 +276,9 @@ normalize_settings() {
     fi
     if ! cf_fallback_force=$(normalize_bool "${SUDOKU_CF_FALLBACK_FORCE}"); then
         error "Invalid SUDOKU_CF_FALLBACK_FORCE=${SUDOKU_CF_FALLBACK_FORCE} (expected true/false)"
+    fi
+    if ! warp_enabled=$(normalize_bool "${SUDOKU_WARP}"); then
+        error "Invalid SUDOKU_WARP=${SUDOKU_WARP} (expected true/false)"
     fi
 
     SUDOKU_PORT=$(trim_space "${SUDOKU_PORT}")
@@ -348,6 +361,7 @@ normalize_settings() {
 
     CF_FALLBACK_ENABLED="${cf_fallback_enabled}"
     CF_FALLBACK_FORCE="${cf_fallback_force}"
+    WARP_ENABLED="${warp_enabled}"
     CF_FALLBACK_BIND=$(trim_space "${SUDOKU_CF_FALLBACK_BIND}")
     if [[ -z "${CF_FALLBACK_BIND}" ]]; then
         CF_FALLBACK_BIND="127.0.0.1"
@@ -1711,6 +1725,315 @@ EOF
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# Optional WARP Egress (Sudoku-native sing-box)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+latest_github_asset_url() {
+    local repo="${1:-}"
+    local pattern="${2:-}"
+    local url=""
+    [[ -n "${repo}" && -n "${pattern}" ]] || return 1
+
+    url=$(
+        curl -fsSL "https://api.github.com/repos/${repo}/releases/latest" \
+            | jq -r --arg pattern "${pattern}" '.assets[] | select(.name | test($pattern)) | .browser_download_url' \
+            | head -n 1
+    )
+    [[ -n "${url}" && "${url}" != "null" ]] || return 1
+    printf '%s' "${url}"
+}
+
+ensure_wgcf_binary() {
+    if command -v wgcf >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local url temp_file
+    info "Installing wgcf for automatic WARP profile generation..."
+    url=$(latest_github_asset_url "ViRb3/wgcf" "^wgcf_.*_linux_${ARCH}$") || error "Failed to find wgcf linux-${ARCH} release asset"
+    temp_file=$(mktemp)
+    if ! curl -fsSL "${url}" -o "${temp_file}"; then
+        rm -f "${temp_file}"
+        error "Failed to download wgcf from: ${url}"
+    fi
+    mv "${temp_file}" "${INSTALL_DIR}/wgcf"
+    chmod 755 "${INSTALL_DIR}/wgcf"
+    success "wgcf installed to ${INSTALL_DIR}/wgcf"
+}
+
+ensure_sudoku_sing_box_binary() {
+    if command -v sudoku-sing-box >/dev/null 2>&1; then
+        return 0
+    fi
+
+    local url temp_dir binary
+    info "Installing Sudoku-enabled sing-box for WARP egress..."
+    url=$(latest_github_asset_url "SUDOKU-ASCII/sudoku-sing-box" "^sing-box-.*-linux-${ARCH}\\.tar\\.gz$") || error "Failed to find sudoku-sing-box linux-${ARCH} release asset"
+    temp_dir=$(mktemp -d)
+    if ! curl -fsSL "${url}" -o "${temp_dir}/sing-box.tar.gz"; then
+        rm -rf "${temp_dir}"
+        error "Failed to download sudoku-sing-box from: ${url}"
+    fi
+    tar -xzf "${temp_dir}/sing-box.tar.gz" -C "${temp_dir}"
+    binary=$(find "${temp_dir}" -type f -name sing-box | head -n 1)
+    if [[ -z "${binary}" ]]; then
+        rm -rf "${temp_dir}"
+        error "Downloaded sudoku-sing-box archive did not contain a sing-box binary"
+    fi
+    mv "${binary}" "${INSTALL_DIR}/sudoku-sing-box"
+    chmod 755 "${INSTALL_DIR}/sudoku-sing-box"
+    rm -rf "${temp_dir}"
+    success "sudoku-sing-box installed to ${INSTALL_DIR}/sudoku-sing-box"
+}
+
+ensure_warp_profile() {
+    ensure_wgcf_binary
+
+    mkdir -p "${SUDOKU_WARP_DIR}"
+    chmod 700 "${SUDOKU_WARP_DIR}"
+
+    if [[ -f "${SUDOKU_WARP_PROFILE}" ]] && grep -q '^PrivateKey[[:space:]]*=' "${SUDOKU_WARP_PROFILE}" && grep -q '^PublicKey[[:space:]]*=' "${SUDOKU_WARP_PROFILE}"; then
+        success "Existing WARP profile found: ${SUDOKU_WARP_PROFILE}"
+        return 0
+    fi
+
+    info "Registering a free Cloudflare WARP device with wgcf..."
+    (
+        cd "${SUDOKU_WARP_DIR}"
+        umask 077
+        if [[ ! -f wgcf-account.toml ]]; then
+            wgcf register --accept-tos
+        fi
+        wgcf generate --profile "$(basename "${SUDOKU_WARP_PROFILE}")"
+    )
+    chmod 600 "${SUDOKU_WARP_DIR}/wgcf-account.toml" "${SUDOKU_WARP_PROFILE}" 2>/dev/null || true
+    success "WARP WireGuard profile generated"
+}
+
+write_sing_box_warp_config() {
+    mkdir -p "${SING_BOX_CONFIG_DIR}" "${SING_BOX_CACHE_DIR}"
+    chmod 700 "${SING_BOX_CACHE_DIR}"
+
+    python3 - \
+        "${SUDOKU_WARP_PROFILE}" \
+        "${SING_BOX_CONFIG_FILE}" \
+        "${SUDOKU_PORT}" \
+        "${MASTER_PUBLIC_KEY}" \
+        "${SUDOKU_FALLBACK}" \
+        "${DEFAULT_ASCII_MODE}" \
+        "${CUSTOM_TABLE}" \
+        "${DISABLE_HTTP_MASK}" \
+        "${HTTP_MASK_MODE}" \
+        "${HTTP_MASK_TLS}" \
+        "${HTTP_MASK_HOST}" \
+        "${HTTP_MASK_PATH_ROOT}" \
+        "${HTTP_MASK_MULTIPLEX}" << 'PY'
+import json
+import sys
+from pathlib import Path
+
+profile_path = Path(sys.argv[1])
+output_path = Path(sys.argv[2])
+sudoku_port = int(sys.argv[3])
+sudoku_key = sys.argv[4]
+fallback_address = sys.argv[5]
+ascii_mode = sys.argv[6]
+custom_table = sys.argv[7]
+httpmask_disable = sys.argv[8].lower() == "true"
+httpmask_mode = sys.argv[9]
+httpmask_tls = sys.argv[10].lower() == "true"
+httpmask_host = sys.argv[11]
+httpmask_path_root = sys.argv[12]
+httpmask_multiplex = sys.argv[13]
+
+sections = {}
+section = None
+for raw_line in profile_path.read_text().splitlines():
+    line = raw_line.split("#", 1)[0].strip()
+    if not line:
+        continue
+    if line.startswith("[") and line.endswith("]"):
+        section = line[1:-1].strip()
+        sections.setdefault(section, {})
+        continue
+    if "=" not in line or section is None:
+        continue
+    key, value = line.split("=", 1)
+    sections.setdefault(section, {})[key.strip()] = value.strip()
+
+interface = sections.get("Interface", {})
+peer = sections.get("Peer", {})
+
+def csv(value):
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+private_key = interface.get("PrivateKey", "")
+addresses = csv(interface.get("Address", ""))
+public_key = peer.get("PublicKey", "")
+allowed_ips = csv(peer.get("AllowedIPs", "0.0.0.0/0, ::/0"))
+endpoint = peer.get("Endpoint", "engage.cloudflareclient.com:2408")
+mtu = int(interface.get("MTU", "1280"))
+
+if not private_key or not addresses or not public_key or not endpoint:
+    raise SystemExit(f"invalid WARP profile: {profile_path}")
+
+if endpoint.startswith("["):
+    host, rest = endpoint[1:].split("]", 1)
+    port = rest.lstrip(":")
+else:
+    host, port = endpoint.rsplit(":", 1)
+
+peer_config = {
+    "address": host,
+    "port": int(port),
+    "public_key": public_key,
+    "allowed_ips": allowed_ips,
+}
+
+reserved = csv(peer.get("Reserved", ""))
+if reserved:
+    peer_config["reserved"] = [int(item) for item in reserved]
+
+sudoku_inbound = {
+    "type": "sudoku",
+    "tag": "sudoku-in",
+    "listen": "::",
+    "listen_port": sudoku_port,
+    "key": sudoku_key,
+    "aead": "chacha20-poly1305",
+    "ascii": ascii_mode,
+    "padding_min": 2,
+    "padding_max": 7,
+    "enable_pure_downlink": False,
+    "fallback_address": fallback_address,
+    "suspicious_action": "fallback",
+    "httpmask": {
+        "disable": httpmask_disable,
+        "mode": httpmask_mode,
+        "tls": httpmask_tls,
+        "host": httpmask_host,
+        "path_root": httpmask_path_root,
+        "multiplex": httpmask_multiplex,
+    },
+}
+if custom_table:
+    sudoku_inbound["custom_table"] = custom_table
+
+config = {
+    "log": {
+        "level": "info",
+        "timestamp": True,
+    },
+    "dns": {
+        "servers": [
+            {
+                "type": "udp",
+                "tag": "cloudflare",
+                "server": "1.1.1.1",
+                "server_port": 53,
+            }
+        ],
+        "final": "cloudflare",
+        "strategy": "prefer_ipv4",
+    },
+    "inbounds": [sudoku_inbound],
+    "outbounds": [
+        {
+            "type": "direct",
+            "tag": "direct",
+        }
+    ],
+    "endpoints": [
+        {
+            "type": "wireguard",
+            "tag": "wireguard",
+            "system": False,
+            "mtu": mtu,
+            "address": addresses,
+            "private_key": private_key,
+            "peers": [peer_config],
+        }
+    ],
+    "route": {
+        "final": "wireguard",
+        "auto_detect_interface": True,
+        "default_domain_resolver": {
+            "server": "cloudflare",
+            "strategy": "prefer_ipv4",
+        },
+    },
+}
+
+output_path.write_text(json.dumps(config, indent=2) + "\n")
+PY
+
+    chmod 600 "${SING_BOX_CONFIG_FILE}"
+    if ! sudoku-sing-box check -c "${SING_BOX_CONFIG_FILE}" >/tmp/sudoku-sing-box-check.log 2>&1; then
+        cat /tmp/sudoku-sing-box-check.log >&2 || true
+        error "sudoku-sing-box WARP config validation failed: ${SING_BOX_CONFIG_FILE}"
+    fi
+    success "sudoku-sing-box WARP config saved to ${SING_BOX_CONFIG_FILE}"
+}
+
+create_sing_box_service() {
+    cat > "/etc/systemd/system/${SING_BOX_SERVICE_NAME}.service" << EOF
+[Unit]
+Description=Sudoku sing-box server with WARP egress
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=${INSTALL_DIR}/sudoku-sing-box run -c ${SING_BOX_CONFIG_FILE} -D ${SING_BOX_CACHE_DIR}
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=1048576
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+remove_legacy_warp_tun_service() {
+    systemctl stop "sudoku-singbox-route" 2>/dev/null || true
+    systemctl disable "sudoku-singbox-route" 2>/dev/null || true
+    if [[ -x "/usr/local/sbin/sudoku-singbox-route" ]]; then
+        "/usr/local/sbin/sudoku-singbox-route" stop >/dev/null 2>&1 || true
+    fi
+    rm -f "/etc/systemd/system/sudoku-singbox-route.service"
+    rm -f "/usr/local/sbin/sudoku-singbox-route"
+}
+
+setup_warp_egress() {
+    if [[ "${WARP_ENABLED}" != "true" ]]; then
+        return 0
+    fi
+
+    info "Setting up Sudoku-native sing-box with WARP egress..."
+    remove_legacy_warp_tun_service
+    ensure_sudoku_sing_box_binary
+    ensure_warp_profile
+    write_sing_box_warp_config
+    create_sing_box_service
+
+    systemctl daemon-reload
+    if ! systemctl enable --now "${SING_BOX_SERVICE_NAME}" >/dev/null 2>&1; then
+        systemctl status "${SING_BOX_SERVICE_NAME}" --no-pager -l >&2 || true
+        error "Failed to enable/start ${SING_BOX_SERVICE_NAME}"
+    fi
+    if ! systemctl restart "${SING_BOX_SERVICE_NAME}"; then
+        systemctl status "${SING_BOX_SERVICE_NAME}" --no-pager -l >&2 || true
+        journalctl -u "${SING_BOX_SERVICE_NAME}" -n 60 --no-pager >&2 || true
+        error "Failed to restart ${SING_BOX_SERVICE_NAME}"
+    fi
+
+    success "WARP egress enabled for Sudoku inbound traffic"
+}
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # Firewall Configuration
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1740,6 +2063,15 @@ configure_firewall() {
 # ═══════════════════════════════════════════════════════════════════════════════
 
 create_service() {
+    if [[ "${WARP_ENABLED}" == "true" ]]; then
+        systemctl disable "${SERVICE_NAME}" >/dev/null 2>&1 || true
+        systemctl stop "${SERVICE_NAME}" >/dev/null 2>&1 || true
+        rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
+        systemctl daemon-reload
+        success "Sudoku is served by ${SING_BOX_SERVICE_NAME}"
+        return 0
+    fi
+
     info "Creating systemd service..."
     
     cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
@@ -1760,7 +2092,7 @@ EOF
     
     systemctl daemon-reload
     systemctl enable "${SERVICE_NAME}" > /dev/null 2>&1
-    systemctl start "${SERVICE_NAME}"
+    systemctl restart "${SERVICE_NAME}" > /dev/null 2>&1 || systemctl start "${SERVICE_NAME}"
     
     sleep 2
     
@@ -1786,7 +2118,11 @@ wait_for_sudoku_port() {
 
 ensure_sudoku_core_ready() {
     if ! wait_for_sudoku_port 10 1; then
-        error "Sudoku core did not open port ${SUDOKU_PORT}. Check: journalctl -u ${SERVICE_NAME}"
+        local log_service="${SERVICE_NAME}"
+        if [[ "${WARP_ENABLED}" == "true" ]]; then
+            log_service="${SING_BOX_SERVICE_NAME}"
+        fi
+        error "Sudoku core did not open port ${SUDOKU_PORT}. Check: journalctl -u ${log_service}"
     fi
     SUDOKU_CORE_READY="true"
     success "Sudoku core is listening on port ${SUDOKU_PORT}"
@@ -2604,11 +2940,23 @@ print_results() {
     echo ""
     
     echo -e "${CYAN}${BOLD}⚙️  Service Management:${NC}"
-    echo -e "  Status:  ${YELLOW}systemctl status ${SERVICE_NAME}${NC}"
+    if [[ "${WARP_ENABLED}" == "true" ]]; then
+        echo -e "  Status:  ${YELLOW}systemctl status ${SING_BOX_SERVICE_NAME}${NC}"
+    else
+        echo -e "  Status:  ${YELLOW}systemctl status ${SERVICE_NAME}${NC}"
+    fi
     echo -e "  Sub:     ${YELLOW}systemctl status ${SUBSCRIPTION_SERVICE_NAME}${NC}"
-    echo -e "  Restart: ${YELLOW}systemctl restart ${SERVICE_NAME}${NC}"
+    if [[ "${WARP_ENABLED}" == "true" ]]; then
+        echo -e "  Restart: ${YELLOW}systemctl restart ${SING_BOX_SERVICE_NAME}${NC}"
+    else
+        echo -e "  Restart: ${YELLOW}systemctl restart ${SERVICE_NAME}${NC}"
+    fi
     echo -e "  Sub-Rst: ${YELLOW}systemctl restart ${SUBSCRIPTION_SERVICE_NAME}${NC}"
-    echo -e "  Logs:    ${YELLOW}journalctl -u ${SERVICE_NAME} -f${NC}"
+    if [[ "${WARP_ENABLED}" == "true" ]]; then
+        echo -e "  Logs:    ${YELLOW}journalctl -u ${SING_BOX_SERVICE_NAME} -f${NC}"
+    else
+        echo -e "  Logs:    ${YELLOW}journalctl -u ${SERVICE_NAME} -f${NC}"
+    fi
     echo -e "  SubLog:  ${YELLOW}journalctl -u ${SUBSCRIPTION_SERVICE_NAME} -f${NC}"
     echo ""
     
@@ -2617,6 +2965,10 @@ print_results() {
     echo -e "  Sub YAML:    ${YELLOW}${SUBSCRIPTION_OUTPUT_FILE}${NC}"
     if [[ -f "${EXPORT_STATE_FILE}" ]]; then
         echo -e "  Export state: ${YELLOW}${EXPORT_STATE_FILE}${NC}"
+    fi
+    if [[ "${WARP_ENABLED}" == "true" ]]; then
+        echo -e "  WARP config:  ${YELLOW}${SING_BOX_CONFIG_FILE}${NC}"
+        echo -e "  WARP binary:  ${YELLOW}${INSTALL_DIR}/sudoku-sing-box${NC}"
     fi
     echo -e "  Binary:      ${YELLOW}${INSTALL_DIR}/sudoku${NC}"
     echo ""
@@ -2654,6 +3006,15 @@ uninstall() {
     systemctl stop "${SERVICE_NAME}" 2>/dev/null || true
     systemctl disable "${SERVICE_NAME}" 2>/dev/null || true
     rm -f "/etc/systemd/system/${SERVICE_NAME}.service"
+    systemctl daemon-reload
+
+    remove_legacy_warp_tun_service
+
+    systemctl stop "${SING_BOX_SERVICE_NAME}" 2>/dev/null || true
+    systemctl disable "${SING_BOX_SERVICE_NAME}" 2>/dev/null || true
+    rm -f "/etc/systemd/system/${SING_BOX_SERVICE_NAME}.service"
+    rm -f "${SING_BOX_CONFIG_FILE}"
+    rm -rf "${SING_BOX_CACHE_DIR}"
     systemctl daemon-reload
 
     systemctl stop "${FALLBACK_SERVICE_NAME}" 2>/dev/null || true
@@ -2714,6 +3075,15 @@ main() {
     # If already installed, only update the binary (do not touch config)
     if has_existing_install; then
         update_kernel_only
+        if [[ "${WARP_ENABLED}" == "true" ]]; then
+            if load_existing_config_context; then
+                setup_warp_egress
+                create_service
+                ensure_sudoku_core_ready
+            else
+                record_nonfatal_issue "SUDOKU_WARP=true was requested, but existing Sudoku config could not be loaded; WARP setup was skipped."
+            fi
+        fi
         echo ""
         if prepare_existing_install_output; then
             print_results
@@ -2747,6 +3117,7 @@ main() {
     if ! setup_cf_fallback; then
         record_nonfatal_issue "Cloudflare 500 fallback setup failed; continuing with Sudoku core deployment."
     fi
+    setup_warp_egress
     create_config
     configure_firewall
     create_service
