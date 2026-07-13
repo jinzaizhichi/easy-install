@@ -19,17 +19,14 @@
 #   SUDOKU_CF_FALLBACK_FORCE - Force override SUDOKU_FALLBACK when CF fallback starts (default: false)
 #   SERVER_IP        - Override public host/IP used in short link & exported Sudoku node (default: auto-detect)
 #   SUDOKU_HTTP_MASK - Enable HTTP mask (default: true)
-#   SUDOKU_HTTP_MASK_MODE - HTTP mask mode: auto/stream/poll/legacy/ws (server default: auto; exported client default: ws)
+#   SUDOKU_HTTP_MASK_MODE - HTTP mask mode: auto/stream/poll/legacy/ws (server default: auto)
 #   SUDOKU_HTTP_MASK_TLS  - Use HTTPS in HTTP mask tunnel modes (default: false)
 #   SUDOKU_HTTP_MASK_MULTIPLEX - HTTP mask mux: off/auto/on (default: on)
 #   SUDOKU_HTTP_MASK_HOST - Override HTTP Host/SNI in tunnel modes (default: empty)
 #   SUDOKU_HTTP_MASK_PATH_ROOT - Optional first-level path prefix for HTTP mask/tunnel endpoints (default: random 6-10 lowercase letters)
-#   SUDOKU_SUBSCRIPTION_DOMAIN - HTTPS subscription host (default: use SERVER_IP if it is a domain, otherwise derive <ipv4>.sslip.io)
-#   SUDOKU_SUBSCRIPTION_PORT - HTTPS subscription port (default: 8443)
-#   SUDOKU_SUBSCRIPTION_PATH - HTTPS subscription path suffix (default: random subscription-xxxxxxxxxxxx.yaml)
-#   SUDOKU_SUBSCRIPTION_NODE_NAME - Node name used inside generated Mihomo subscription (default: sudoku)
+#   SUDOKU_SUBSCRIPTION_PATH - Local Mihomo YAML output path (default: /etc/sudoku/subscription.yaml)
+#   SUDOKU_SUBSCRIPTION_NODE_NAME - Node name used inside generated Mihomo YAML (default: sudoku)
 #   SUDOKU_SUBSCRIPTION_TEMPLATE_URL - Optional remote YAML template used as the subscription base
-#   SUDOKU_ACME_EMAIL - ACME account email used for certificate issuance (default: admin@<subscription-domain>)
 #   SUDOKU_WARP     - Serve Sudoku with sudoku-sing-box and route all proxied traffic through WARP (default: false)
 #
 
@@ -53,18 +50,14 @@ SUDOKU_CF_FALLBACK_FORCE="${SUDOKU_CF_FALLBACK_FORCE:-false}"
 SUDOKU_CF_FALLBACK_REPO="${SUDOKU_CF_FALLBACK_REPO:-donlon/cloudflare-error-page}"
 SUDOKU_CF_FALLBACK_BRANCH="${SUDOKU_CF_FALLBACK_BRANCH:-main}"
 SUDOKU_HTTP_MASK="${SUDOKU_HTTP_MASK:-true}"
-SUDOKU_HTTP_MASK_MODE_INPUT="${SUDOKU_HTTP_MASK_MODE-}"
 SUDOKU_HTTP_MASK_MODE="${SUDOKU_HTTP_MASK_MODE:-auto}"
 SUDOKU_HTTP_MASK_TLS="${SUDOKU_HTTP_MASK_TLS:-false}"
 SUDOKU_HTTP_MASK_MULTIPLEX="${SUDOKU_HTTP_MASK_MULTIPLEX:-on}"
 SUDOKU_HTTP_MASK_HOST="${SUDOKU_HTTP_MASK_HOST:-}"
 SUDOKU_HTTP_MASK_PATH_ROOT="${SUDOKU_HTTP_MASK_PATH_ROOT:-}"
-SUDOKU_SUBSCRIPTION_DOMAIN="${SUDOKU_SUBSCRIPTION_DOMAIN:-}"
-SUDOKU_SUBSCRIPTION_PORT="${SUDOKU_SUBSCRIPTION_PORT:-8443}"
 SUDOKU_SUBSCRIPTION_PATH="${SUDOKU_SUBSCRIPTION_PATH:-}"
 SUDOKU_SUBSCRIPTION_NODE_NAME="${SUDOKU_SUBSCRIPTION_NODE_NAME:-sudoku}"
 SUDOKU_SUBSCRIPTION_TEMPLATE_URL="${SUDOKU_SUBSCRIPTION_TEMPLATE_URL:-}"
-SUDOKU_ACME_EMAIL="${SUDOKU_ACME_EMAIL:-}"
 SUDOKU_WARP="${SUDOKU_WARP:-${SUDOKU_WARP_GOOGLE:-false}}"
 INSTALL_DIR="/usr/local/bin"
 CONFIG_DIR="/etc/sudoku"
@@ -72,17 +65,10 @@ EXPORT_STATE_FILE="${CONFIG_DIR}/export-state.env"
 SERVICE_NAME="sudoku"
 FALLBACK_SERVICE_NAME="sudoku-fallback"
 FALLBACK_LIB_DIR="/usr/local/lib/sudoku-fallback"
-SUBSCRIPTION_SERVICE_NAME="sudoku-subscription"
-SUBSCRIPTION_ACME_TIMER_NAME="sudoku-acme-renew.timer"
-SUBSCRIPTION_LIB_DIR="/usr/local/lib/sudoku-subscription"
-SUBSCRIPTION_WWW_DIR="${SUBSCRIPTION_LIB_DIR}/www"
-SUBSCRIPTION_RUNTIME_DIR="${SUBSCRIPTION_LIB_DIR}/run"
-SUBSCRIPTION_CERT_DIR="${CONFIG_DIR}/subscription-cert"
-SUBSCRIPTION_SERVER_SCRIPT="${SUBSCRIPTION_LIB_DIR}/server.py"
-SUBSCRIPTION_SERVER_CONFIG="${SUBSCRIPTION_LIB_DIR}/server.json"
-SUBSCRIPTION_RENEW_SCRIPT="${SUBSCRIPTION_LIB_DIR}/renew-cert.sh"
-ACME_HOME="/root/.acme.sh"
-ACME_BIN="${ACME_HOME}/acme.sh"
+LEGACY_SUBSCRIPTION_SERVICE_NAME="sudoku-subscription"
+LEGACY_SUBSCRIPTION_ACME_TIMER_NAME="sudoku-acme-renew.timer"
+LEGACY_SUBSCRIPTION_LIB_DIR="/usr/local/lib/sudoku-subscription"
+LEGACY_SUBSCRIPTION_CERT_DIR="${CONFIG_DIR}/subscription-cert"
 SING_BOX_SERVICE_NAME="sudoku-sing-box"
 SING_BOX_CONFIG_DIR="/etc/sing-box"
 SING_BOX_CONFIG_FILE="${SING_BOX_CONFIG_DIR}/sudoku-warp.json"
@@ -93,7 +79,7 @@ DEFAULT_ASCII_MODE="up_ascii_down_entropy"
 CUSTOM_TABLE=""
 DISABLE_HTTP_MASK="false"
 HTTP_MASK_MODE="auto"
-CLIENT_HTTP_MASK_MODE="ws"
+CLIENT_DISABLE_HTTP_MASK="true"
 HTTP_MASK_TLS="false"
 HTTP_MASK_MULTIPLEX="on"
 HTTP_MASK_HOST=""
@@ -103,24 +89,13 @@ CF_FALLBACK_BIND="127.0.0.1"
 CF_FALLBACK_PORT="10232"
 CF_FALLBACK_PORT_FALLBACK="80"
 CF_FALLBACK_FORCE="false"
-SUBSCRIPTION_DOMAIN=""
-SUBSCRIPTION_PATH=""
 SUBSCRIPTION_NODE_NAME="sudoku"
-SUBSCRIPTION_HTTPS_PORT="8443"
-SUBSCRIPTION_HTTP_PORT="80"
-SUBSCRIPTION_URL=""
 SUBSCRIPTION_OUTPUT_FILE=""
-SUBSCRIPTION_CERT_FILE="${SUBSCRIPTION_CERT_DIR}/fullchain.cer"
-SUBSCRIPTION_KEY_FILE="${SUBSCRIPTION_CERT_DIR}/privkey.key"
-SUBSCRIPTION_BIND="0.0.0.0"
 SUBSCRIPTION_TEMPLATE_URL=""
-ACME_EMAIL=""
-ACME_STOPPED_SERVICES=""
+NODE_YAML=""
 PKG_MANAGER=""
 SUDOKU_CORE_READY="false"
 WARP_ENABLED="false"
-SUBSCRIPTION_SETUP_ENABLED="true"
-SUBSCRIPTION_DISABLED_REASON=""
 NONFATAL_ISSUES=()
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -161,17 +136,6 @@ record_nonfatal_issue() {
     [[ -n "${message}" ]] || return 0
     NONFATAL_ISSUES+=("${message}")
     warn "${message}"
-}
-
-disable_subscription_setup() {
-    local reason="${1:-HTTPS subscription setup is unavailable.}"
-    SUBSCRIPTION_SETUP_ENABLED="false"
-    SUBSCRIPTION_URL=""
-    SUBSCRIPTION_OUTPUT_FILE=""
-    if [[ -z "${SUBSCRIPTION_DISABLED_REASON}" ]]; then
-        SUBSCRIPTION_DISABLED_REASON="${reason}"
-        record_nonfatal_issue "${reason}"
-    fi
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -320,11 +284,6 @@ normalize_settings() {
         *) error "Invalid SUDOKU_HTTP_MASK_MODE=${SUDOKU_HTTP_MASK_MODE} (expected auto/stream/poll/legacy/ws)" ;;
     esac
 
-    CLIENT_HTTP_MASK_MODE="${HTTP_MASK_MODE}"
-    if [[ -z "$(trim_space "${SUDOKU_HTTP_MASK_MODE_INPUT}")" ]]; then
-        CLIENT_HTTP_MASK_MODE="ws"
-    fi
-
     HTTP_MASK_HOST=$(trim_space "${SUDOKU_HTTP_MASK_HOST}")
     HTTP_MASK_TLS="${http_mask_tls}"
 
@@ -375,41 +334,25 @@ normalize_settings() {
         error "Invalid SUDOKU_CF_FALLBACK_FALLBACK_PORT=${SUDOKU_CF_FALLBACK_FALLBACK_PORT} (expected 1-65535)"
     fi
 
-    SUBSCRIPTION_HTTPS_PORT=$(trim_space "${SUDOKU_SUBSCRIPTION_PORT}")
-    if ! is_valid_port "${SUBSCRIPTION_HTTPS_PORT}"; then
-        disable_subscription_setup "Invalid SUDOKU_SUBSCRIPTION_PORT=${SUDOKU_SUBSCRIPTION_PORT}; HTTPS subscription will be skipped."
+    SUBSCRIPTION_OUTPUT_FILE=$(trim_space "${SUDOKU_SUBSCRIPTION_PATH}")
+    if [[ -z "${SUBSCRIPTION_OUTPUT_FILE}" ]]; then
+        SUBSCRIPTION_OUTPUT_FILE="${CONFIG_DIR}/subscription.yaml"
+    elif [[ "${SUBSCRIPTION_OUTPUT_FILE}" != /* ]]; then
+        SUBSCRIPTION_OUTPUT_FILE="${CONFIG_DIR}/${SUBSCRIPTION_OUTPUT_FILE}"
     fi
-
-    SUBSCRIPTION_PATH=$(trim_space "${SUDOKU_SUBSCRIPTION_PATH}")
-    if [[ -z "${SUBSCRIPTION_PATH}" ]]; then
-        SUBSCRIPTION_PATH="subscription-$(generate_random_token 12).yaml"
-    fi
-    while [[ "${SUBSCRIPTION_PATH}" == /* ]]; do
-        SUBSCRIPTION_PATH="${SUBSCRIPTION_PATH#/}"
-    done
-    if [[ -z "${SUBSCRIPTION_PATH}" || ! "${SUBSCRIPTION_PATH}" =~ ^[A-Za-z0-9._-]+$ ]]; then
-        disable_subscription_setup "Invalid SUDOKU_SUBSCRIPTION_PATH=${SUDOKU_SUBSCRIPTION_PATH}; HTTPS subscription will be skipped."
-    fi
+    case "${SUBSCRIPTION_OUTPUT_FILE}" in
+        *$'\n'*|*$'\r'*) error "Invalid SUDOKU_SUBSCRIPTION_PATH: path must be a single line" ;;
+    esac
+    case "${SUBSCRIPTION_OUTPUT_FILE}" in
+        *.yaml|*.yml) ;;
+        *) error "Invalid SUDOKU_SUBSCRIPTION_PATH=${SUDOKU_SUBSCRIPTION_PATH} (expected a .yaml or .yml file)" ;;
+    esac
 
     SUBSCRIPTION_NODE_NAME=$(trim_space "${SUDOKU_SUBSCRIPTION_NODE_NAME}")
     if [[ -z "${SUBSCRIPTION_NODE_NAME}" ]]; then
         SUBSCRIPTION_NODE_NAME="sudoku"
     fi
     SUBSCRIPTION_TEMPLATE_URL=$(trim_space "${SUDOKU_SUBSCRIPTION_TEMPLATE_URL}")
-    SUBSCRIPTION_DOMAIN=$(trim_space "${SUDOKU_SUBSCRIPTION_DOMAIN}")
-    ACME_EMAIL=$(trim_space "${SUDOKU_ACME_EMAIL}")
-    if [[ "${SUBSCRIPTION_SETUP_ENABLED}" == "true" ]] && ! select_subscription_https_port; then
-        disable_subscription_setup "HTTPS subscription port selection failed; sudoku:// short link will still be shown."
-    fi
-
-    if [[ "${CF_FALLBACK_PORT}" == "${SUBSCRIPTION_HTTP_PORT}" ]]; then
-        CF_FALLBACK_PORT=$(pick_random_high_port)
-        warn "SUDOKU_CF_FALLBACK_PORT conflicts with ACME HTTP validation port ${SUBSCRIPTION_HTTP_PORT}; using ${CF_FALLBACK_PORT} instead."
-    fi
-    if [[ "${CF_FALLBACK_PORT_FALLBACK}" == "${SUBSCRIPTION_HTTP_PORT}" ]]; then
-        CF_FALLBACK_PORT_FALLBACK=$(pick_random_high_port)
-        warn "SUDOKU_CF_FALLBACK_FALLBACK_PORT conflicts with ACME HTTP validation port ${SUBSCRIPTION_HTTP_PORT}; using ${CF_FALLBACK_PORT_FALLBACK} instead."
-    fi
 }
 
 join_host_port() {
@@ -431,113 +374,12 @@ build_http_url() {
     printf 'http://%s/' "$(join_host_port "${host}" "${port}")"
 }
 
-build_https_url() {
-    local host="${1:-}"
-    local port="${2:-}"
-    local path="${3:-/}"
-    local authority=""
-    if [[ -z "${host}" ]]; then
-        return 1
-    fi
-    if [[ -z "${path}" ]]; then
-        path="/"
-    fi
-    if [[ "${path}" != /* ]]; then
-        path="/${path}"
-    fi
-
-    if [[ -n "${port}" && "${port}" != "443" ]]; then
-        authority=$(join_host_port "${host}" "${port}")
-    else
-        authority="${host}"
-        if [[ "${host}" == *:* && "${host}" != \[*\] ]]; then
-            authority="[${host}]"
-        fi
-    fi
-
-    printf 'https://%s%s' "${authority}" "${path}"
-}
-
-is_ipv4_address() {
-    local ip="${1:-}"
-    local IFS='.'
-    local -a octets=()
-    [[ "${ip}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
-    read -r -a octets <<< "${ip}"
-    if [[ ${#octets[@]} -ne 4 ]]; then
-        return 1
-    fi
-    local octet
-    for octet in "${octets[@]}"; do
-        [[ "${octet}" =~ ^[0-9]+$ ]] || return 1
-        if ((octet < 0 || octet > 255)); then
-            return 1
-        fi
-    done
-    return 0
-}
-
-is_ipv6_address() {
-    local ip="${1:-}"
-    [[ "${ip}" == *:* ]]
-}
-
-is_hostname_like() {
-    local host="${1:-}"
-    [[ -n "${host}" && "${host}" =~ ^[A-Za-z0-9.-]+$ && "${host}" == *.* ]]
-}
-
-generate_random_token() {
-    local length="${1:-12}"
-    local alphabet="abcdefghijklmnopqrstuvwxyz0123456789"
-    local output=""
-    local i idx
-    for ((i=0; i<length; i++)); do
-        idx=$(($(random_uint32) % ${#alphabet}))
-        output+="${alphabet:${idx}:1}"
-    done
-    printf '%s' "${output}"
-}
-
 yaml_escape_double_quoted() {
     local value="${1-}"
     value="${value//\\/\\\\}"
     value="${value//\"/\\\"}"
     value="${value//$'\n'/\\n}"
     printf '%s' "${value}"
-}
-
-systemd_unit_exists() {
-    local unit="${1:-}"
-    [[ -n "${unit}" ]] || return 1
-    systemctl list-unit-files "${unit}.service" --no-legend 2>/dev/null | grep -q "^${unit}\.service"
-}
-
-is_subscription_service_using_port() {
-    local port="${1:-}"
-    [[ -f "${SUBSCRIPTION_SERVER_CONFIG}" ]] || return 1
-    jq -e --arg port "${port}" '.https_port == ($port | tonumber)' "${SUBSCRIPTION_SERVER_CONFIG}" >/dev/null 2>&1
-}
-
-select_subscription_https_port() {
-    if ! is_tcp_port_in_use "${SUBSCRIPTION_HTTPS_PORT}"; then
-        return 0
-    fi
-
-    if is_subscription_service_using_port "${SUBSCRIPTION_HTTPS_PORT}" && systemctl is-active --quiet "${SUBSCRIPTION_SERVICE_NAME}" 2>/dev/null; then
-        return 0
-    fi
-
-    if [[ "${SUBSCRIPTION_HTTPS_PORT}" == "8443" ]]; then
-        if is_tcp_port_in_use "2053"; then
-            return_error "Port 8443 is occupied and fallback port 2053 is also in use. Please free one of them or set SUDOKU_SUBSCRIPTION_PORT manually."
-        fi
-        SUBSCRIPTION_HTTPS_PORT="2053"
-        warn "Port 8443 is occupied; switching HTTPS subscription port to 2053."
-        return 0
-    fi
-
-    return_error "Port ${SUBSCRIPTION_HTTPS_PORT} is already in use. Please free it or set SUDOKU_SUBSCRIPTION_PORT=2053."
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1469,20 +1311,11 @@ load_export_state() {
     if [[ -z "${SUDOKU_CLIENT_PORT_INPUT}" && -n "${EXPORTED_CLIENT_PORT:-}" ]]; then
         SUDOKU_CLIENT_PORT="${EXPORTED_CLIENT_PORT}"
     fi
-    if [[ -z "${SUDOKU_SUBSCRIPTION_DOMAIN:-}" && -n "${EXPORTED_SUBSCRIPTION_DOMAIN:-}" ]]; then
-        SUBSCRIPTION_DOMAIN="${EXPORTED_SUBSCRIPTION_DOMAIN}"
-    fi
-    if [[ -z "${SUDOKU_SUBSCRIPTION_PATH:-}" && -n "${EXPORTED_SUBSCRIPTION_PATH:-}" ]]; then
-        SUBSCRIPTION_PATH="${EXPORTED_SUBSCRIPTION_PATH}"
-    fi
     if [[ -z "${SUDOKU_SUBSCRIPTION_NODE_NAME:-}" && -n "${EXPORTED_SUBSCRIPTION_NODE_NAME:-}" ]]; then
         SUBSCRIPTION_NODE_NAME="${EXPORTED_SUBSCRIPTION_NODE_NAME}"
     fi
-    if [[ -z "${SUDOKU_SUBSCRIPTION_PORT:-}" && -n "${EXPORTED_SUBSCRIPTION_HTTPS_PORT:-}" ]]; then
-        SUBSCRIPTION_HTTPS_PORT="${EXPORTED_SUBSCRIPTION_HTTPS_PORT}"
-    fi
-    if [[ -z "${SUBSCRIPTION_URL:-}" && -n "${EXPORTED_SUBSCRIPTION_URL:-}" ]]; then
-        SUBSCRIPTION_URL="${EXPORTED_SUBSCRIPTION_URL}"
+    if [[ -z "${SUDOKU_SUBSCRIPTION_PATH:-}" && -n "${EXPORTED_SUBSCRIPTION_OUTPUT_FILE:-}" ]]; then
+        SUBSCRIPTION_OUTPUT_FILE="${EXPORTED_SUBSCRIPTION_OUTPUT_FILE}"
     fi
 
     return 0
@@ -1495,18 +1328,15 @@ AVAILABLE_PRIVATE_KEY=$(printf '%q' "${AVAILABLE_PRIVATE_KEY}")
 MASTER_PUBLIC_KEY=$(printf '%q' "${MASTER_PUBLIC_KEY}")
 EXPORTED_CLIENT_PORT=$(printf '%q' "${SUDOKU_CLIENT_PORT}")
 SHORT_LINK=$(printf '%q' "${SHORT_LINK}")
-EXPORTED_SUBSCRIPTION_DOMAIN=$(printf '%q' "${SUBSCRIPTION_DOMAIN}")
-EXPORTED_SUBSCRIPTION_PATH=$(printf '%q' "${SUBSCRIPTION_PATH}")
 EXPORTED_SUBSCRIPTION_NODE_NAME=$(printf '%q' "${SUBSCRIPTION_NODE_NAME}")
-EXPORTED_SUBSCRIPTION_HTTPS_PORT=$(printf '%q' "${SUBSCRIPTION_HTTPS_PORT}")
-EXPORTED_SUBSCRIPTION_URL=$(printf '%q' "${SUBSCRIPTION_URL}")
+EXPORTED_SUBSCRIPTION_OUTPUT_FILE=$(printf '%q' "${SUBSCRIPTION_OUTPUT_FILE}")
 EOF
     chmod 600 "${EXPORT_STATE_FILE}"
 }
 
 load_existing_config_context() {
     if [[ ! -f "${CONFIG_DIR}/config.json" ]]; then
-        warn "Existing config not found; cannot rebuild short link or HTTPS subscription."
+        warn "Existing config not found; cannot rebuild short link or Mihomo YAML."
         return 1
     fi
 
@@ -1564,29 +1394,17 @@ prepare_existing_install_output() {
     get_public_ip
 
     if ! load_export_state; then
-        warn "Export state not found at ${EXPORT_STATE_FILE}; cannot rebuild short link or HTTPS subscription for this older installation."
+        warn "Export state not found at ${EXPORT_STATE_FILE}; cannot rebuild short link or Mihomo YAML for this older installation."
         return 1
     fi
 
     if [[ -z "${AVAILABLE_PRIVATE_KEY:-}" ]]; then
-        warn "Client export key missing in ${EXPORT_STATE_FILE}; cannot rebuild short link or HTTPS subscription."
+        warn "Client export key missing in ${EXPORT_STATE_FILE}; cannot rebuild short link or Mihomo YAML."
         return 1
     fi
 
     generate_short_link
-
-    if [[ -z "${SUBSCRIPTION_URL:-}" ]]; then
-        if [[ -n "${SUBSCRIPTION_PATH:-}" ]]; then
-            if ! derive_subscription_domain; then
-                return 1
-            fi
-        else
-            warn "Subscription path missing in ${EXPORT_STATE_FILE}; cannot rebuild HTTPS subscription URL."
-            return 1
-        fi
-    elif [[ -n "${SUBSCRIPTION_PATH:-}" ]]; then
-        SUBSCRIPTION_OUTPUT_FILE="${SUBSCRIPTION_WWW_DIR}/${SUBSCRIPTION_PATH}"
-    fi
+    generate_subscription_config
 
     persist_export_state
     return 0
@@ -2042,16 +1860,12 @@ configure_firewall() {
         if ufw status | grep -q "Status: active"; then
             info "Configuring UFW firewall..."
             ufw allow "${SUDOKU_PORT}/tcp" > /dev/null 2>&1
-            ufw allow "${SUBSCRIPTION_HTTP_PORT}/tcp" > /dev/null 2>&1
-            ufw allow "${SUBSCRIPTION_HTTPS_PORT}/tcp" > /dev/null 2>&1
             success "UFW: Opened port ${SUDOKU_PORT}/tcp"
         fi
     elif command -v firewall-cmd &> /dev/null; then
         if systemctl is-active --quiet firewalld; then
             info "Configuring firewalld..."
             firewall-cmd --permanent --add-port="${SUDOKU_PORT}/tcp" > /dev/null 2>&1
-            firewall-cmd --permanent --add-port="${SUBSCRIPTION_HTTP_PORT}/tcp" > /dev/null 2>&1
-            firewall-cmd --permanent --add-port="${SUBSCRIPTION_HTTPS_PORT}/tcp" > /dev/null 2>&1
             firewall-cmd --reload > /dev/null 2>&1
             success "firewalld: Opened port ${SUDOKU_PORT}/tcp"
         fi
@@ -2155,8 +1969,8 @@ generate_short_link() {
   "custom_table": "${CUSTOM_TABLE}",
   "enable_pure_downlink": false,
   "httpmask": {
-    "disable": ${DISABLE_HTTP_MASK},
-    "mode": "${CLIENT_HTTP_MASK_MODE}",
+    "disable": ${CLIENT_DISABLE_HTTP_MASK},
+    "mode": "${HTTP_MASK_MODE}",
     "tls": ${HTTP_MASK_TLS},
     "host": "${HTTP_MASK_HOST}",
     "path_root": "${HTTP_MASK_PATH_ROOT}",
@@ -2178,37 +1992,13 @@ EOF
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# Generate HTTPS Subscription
+# Generate Local Mihomo YAML
 # ═══════════════════════════════════════════════════════════════════════════════
 
-derive_subscription_domain() {
-    if [[ -n "${SUBSCRIPTION_DOMAIN}" ]]; then
-        :
-    elif is_ipv4_address "${SERVER_IP}"; then
-        SUBSCRIPTION_DOMAIN="${SERVER_IP//./-}.sslip.io"
-    elif is_hostname_like "${SERVER_IP}"; then
-        SUBSCRIPTION_DOMAIN="${SERVER_IP}"
-    elif is_ipv6_address "${SERVER_IP}"; then
-        return_error "Auto-generating a subscription domain from IPv6 is not supported. Please set SUDOKU_SUBSCRIPTION_DOMAIN manually."
-    else
-        return_error "Cannot derive subscription domain from SERVER_IP=${SERVER_IP}. Please set SUDOKU_SUBSCRIPTION_DOMAIN manually."
-    fi
-
-    if ! is_hostname_like "${SUBSCRIPTION_DOMAIN}" && ! is_ipv4_address "${SUBSCRIPTION_DOMAIN}" && ! is_ipv6_address "${SUBSCRIPTION_DOMAIN}"; then
-        return_error "Invalid SUDOKU_SUBSCRIPTION_DOMAIN=${SUBSCRIPTION_DOMAIN}"
-    fi
-
-    if [[ -z "${ACME_EMAIL}" ]]; then
-        ACME_EMAIL="admin@${SUBSCRIPTION_DOMAIN}"
-    fi
-
-    SUBSCRIPTION_URL=$(build_https_url "${SUBSCRIPTION_DOMAIN}" "${SUBSCRIPTION_HTTPS_PORT}" "/${SUBSCRIPTION_PATH}")
-    SUBSCRIPTION_OUTPUT_FILE="${SUBSCRIPTION_WWW_DIR}/${SUBSCRIPTION_PATH}"
-}
-
 write_default_subscription_template() {
-    mkdir -p "${SUBSCRIPTION_LIB_DIR}"
-    cat > "${SUBSCRIPTION_LIB_DIR}/template.default.yaml" << 'EOF'
+    local output_file="${1:-}"
+    mkdir -p "$(dirname "${output_file}")"
+    cat > "${output_file}" << 'EOF'
 mixed-port: 7890
 allow-lan: false
 mode: rule
@@ -2266,30 +2056,59 @@ EOF
 }
 
 fetch_subscription_template() {
-    write_default_subscription_template
+    local output_dir="${1:-}"
+    local default_template="${output_dir}/template.default.yaml"
+    local remote_template="${output_dir}/template.remote.yaml"
+    write_default_subscription_template "${default_template}"
     if [[ -n "${SUBSCRIPTION_TEMPLATE_URL}" ]]; then
         info "Downloading subscription template..."
-        if curl -fsSL "${SUBSCRIPTION_TEMPLATE_URL}" -o "${SUBSCRIPTION_LIB_DIR}/template.remote.yaml"; then
-            printf '%s' "${SUBSCRIPTION_LIB_DIR}/template.remote.yaml"
+        if curl -fsSL "${SUBSCRIPTION_TEMPLATE_URL}" -o "${remote_template}"; then
+            printf '%s' "${remote_template}"
             return 0
         fi
         warn "Failed to download remote subscription template. Falling back to built-in template."
     fi
-    printf '%s' "${SUBSCRIPTION_LIB_DIR}/template.default.yaml"
+    printf '%s' "${default_template}"
+}
+
+render_node_yaml() {
+    local node_name server_escaped key_escaped host_escaped path_root_escaped
+    node_name=$(yaml_escape_double_quoted "${SUBSCRIPTION_NODE_NAME}")
+    server_escaped=$(yaml_escape_double_quoted "${SERVER_IP}")
+    key_escaped=$(yaml_escape_double_quoted "${AVAILABLE_PRIVATE_KEY}")
+    host_escaped=$(yaml_escape_double_quoted "${HTTP_MASK_HOST}")
+    path_root_escaped=$(yaml_escape_double_quoted "${HTTP_MASK_PATH_ROOT}")
+
+    printf -- '- name: "%s"\n' "${node_name}"
+    echo "  type: sudoku"
+    printf '  server: "%s"\n' "${server_escaped}"
+    printf '  port: %s\n' "${SUDOKU_PORT}"
+    printf '  key: "%s"\n' "${key_escaped}"
+    echo "  aead-method: chacha20-poly1305"
+    echo "  padding-min: 2"
+    echo "  padding-max: 7"
+    printf '  table-type: %s\n' "${DEFAULT_ASCII_MODE}"
+    if [[ -n "${CUSTOM_TABLE:-}" ]]; then
+        printf '  custom-table: %s\n' "${CUSTOM_TABLE}"
+    fi
+    echo "  httpmask:"
+    printf '    disable: %s\n' "${CLIENT_DISABLE_HTTP_MASK}"
+    printf '    mode: %s\n' "${HTTP_MASK_MODE}"
+    printf '    tls: %s\n' "${HTTP_MASK_TLS}"
+    printf '    host: "%s"\n' "${host_escaped}"
+    printf '    multiplex: "%s"\n' "${HTTP_MASK_MULTIPLEX}"
+    printf '    path-root: "%s"\n' "${path_root_escaped}"
+    echo "  enable-pure-downlink: false"
 }
 
 generate_subscription_config() {
-    info "Generating Mihomo HTTPS subscription..."
+    info "Generating local Mihomo YAML..."
 
-    if ! derive_subscription_domain; then
-        return 1
-    fi
-    mkdir -p "${SUBSCRIPTION_WWW_DIR}" "${SUBSCRIPTION_RUNTIME_DIR}"
-
-    local template_file head_file tail_file node_name server_escaped key_escaped host_escaped path_root_escaped
-    template_file=$(fetch_subscription_template)
-    head_file="${SUBSCRIPTION_RUNTIME_DIR}/template.head"
-    tail_file="${SUBSCRIPTION_RUNTIME_DIR}/template.tail"
+    local temp_dir template_file head_file tail_file
+    temp_dir=$(mktemp -d)
+    template_file=$(fetch_subscription_template "${temp_dir}")
+    head_file="${temp_dir}/template.head"
+    tail_file="${temp_dir}/template.tail"
 
     if ! awk '
         /^proxies:[[:space:]]*$/ { exit }
@@ -2297,6 +2116,7 @@ generate_subscription_config() {
         /^rule-providers:[[:space:]]*$/ { exit }
         { print }
     ' "${template_file}" > "${head_file}"; then
+        rm -rf "${temp_dir}"
         return_error "Failed to render subscription template header"
     fi
 
@@ -2304,607 +2124,71 @@ generate_subscription_config() {
         /^rule-providers:[[:space:]]*$/ { found = 1 }
         found { print }
     ' "${template_file}" > "${tail_file}"; then
+        rm -rf "${temp_dir}"
         return_error "Failed to render subscription template tail"
     fi
 
     if [[ ! -s "${tail_file}" ]]; then
+        rm -rf "${temp_dir}"
         return_error "Subscription template is missing a rule-providers section"
     fi
 
-    node_name=$(yaml_escape_double_quoted "${SUBSCRIPTION_NODE_NAME}")
-    server_escaped=$(yaml_escape_double_quoted "${SERVER_IP}")
-    key_escaped=$(yaml_escape_double_quoted "${AVAILABLE_PRIVATE_KEY}")
+    NODE_YAML=$(render_node_yaml)
+    mkdir -p "$(dirname "${SUBSCRIPTION_OUTPUT_FILE}")"
 
     if ! {
         cat "${head_file}"
         echo ""
         echo "proxies:"
-        printf '  - name: "%s"\n' "${node_name}"
-        echo "    type: sudoku"
-        printf '    server: "%s"\n' "${server_escaped}"
-        printf '    port: %s\n' "${SUDOKU_PORT}"
-        printf '    key: "%s"\n' "${key_escaped}"
-        echo "    aead-method: chacha20-poly1305"
-        echo "    padding-min: 2"
-        echo "    padding-max: 7"
-        printf '    table-type: %s\n' "${DEFAULT_ASCII_MODE}"
-        if [[ -n "${CUSTOM_TABLE:-}" ]]; then
-            printf '    custom-table: %s\n' "${CUSTOM_TABLE}"
-        fi
-        echo "    httpmask:"
-        printf '      disable: %s\n' "${DISABLE_HTTP_MASK}"
-        if [[ "${DISABLE_HTTP_MASK}" != "true" ]]; then
-            printf '      mode: %s\n' "${CLIENT_HTTP_MASK_MODE}"
-            printf '      tls: %s\n' "${HTTP_MASK_TLS}"
-            if [[ -n "${HTTP_MASK_HOST:-}" ]]; then
-                host_escaped=$(yaml_escape_double_quoted "${HTTP_MASK_HOST}")
-                printf '      host: "%s"\n' "${host_escaped}"
-            fi
-            printf '      multiplex: "%s"\n' "${HTTP_MASK_MULTIPLEX}"
-            if [[ -n "${HTTP_MASK_PATH_ROOT:-}" ]]; then
-                path_root_escaped=$(yaml_escape_double_quoted "${HTTP_MASK_PATH_ROOT}")
-                printf '      path-root: "%s"\n' "${path_root_escaped}"
-            fi
-        fi
-        echo "    enable-pure-downlink: false"
+        printf '%s\n' "${NODE_YAML}" | sed 's/^/  /'
         echo ""
         echo "proxy-groups:"
         echo "  - name: Proxy"
         echo "    type: select"
         echo "    proxies:"
-        printf '      - "%s"\n' "${node_name}"
+        printf '      - "%s"\n' "$(yaml_escape_double_quoted "${SUBSCRIPTION_NODE_NAME}")"
         echo ""
         cat "${tail_file}"
     } > "${SUBSCRIPTION_OUTPUT_FILE}"; then
+        rm -rf "${temp_dir}"
         return_error "Failed to write subscription YAML"
     fi
 
-    success "Subscription YAML generated: ${SUBSCRIPTION_OUTPUT_FILE}"
+    chmod 600 "${SUBSCRIPTION_OUTPUT_FILE}"
+    rm -rf "${temp_dir}"
+    success "Mihomo YAML generated: ${SUBSCRIPTION_OUTPUT_FILE}"
 }
 
-write_subscription_server() {
-    mkdir -p "${SUBSCRIPTION_LIB_DIR}"
-    cat > "${SUBSCRIPTION_SERVER_SCRIPT}" << 'PY'
-import argparse
-import json
-import os
-import posixpath
-import signal
-import ssl
-import threading
-from functools import partial
-from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlsplit
-
-
-def load_config(path: str) -> dict:
-    with open(path, "r", encoding="utf-8") as fh:
-        return json.load(fh)
-
-
-def build_https_base(domain: str, port: int) -> str:
-    if ":" in domain and not domain.startswith("["):
-        domain = f"[{domain}]"
-    if port == 443:
-        return f"https://{domain}"
-    return f"https://{domain}:{port}"
-
-
-class QuietHandler(SimpleHTTPRequestHandler):
-    def log_message(self, fmt: str, *args) -> None:  # noqa: A003
-        return
-
-
-def make_http_handler(config: dict, http_only: bool):
-    web_root = config["web_root"]
-    https_base = build_https_base(config["domain"], int(config["https_port"]))
-
-    class HTTPHandler(QuietHandler):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, directory=web_root, **kwargs)
-
-        def do_GET(self):  # noqa: N802
-            parsed = urlsplit(self.path)
-            if parsed.path.startswith("/.well-known/acme-challenge/"):
-                return super().do_GET()
-            if http_only:
-                body = b"Sudoku ACME webroot is ready.\n"
-                self.send_response(200)
-                self.send_header("Content-Type", "text/plain; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-                return
-            self.send_response(301)
-            self.send_header("Location", f"{https_base}{parsed.path or '/'}" + (f"?{parsed.query}" if parsed.query else ""))
-            self.end_headers()
-
-        def do_HEAD(self):  # noqa: N802
-            parsed = urlsplit(self.path)
-            if parsed.path.startswith("/.well-known/acme-challenge/"):
-                return super().do_HEAD()
-            if http_only:
-                self.send_response(200)
-                self.end_headers()
-                return
-            self.send_response(301)
-            self.send_header("Location", f"{https_base}{parsed.path or '/'}" + (f"?{parsed.query}" if parsed.query else ""))
-            self.end_headers()
-
-    return HTTPHandler
-
-
-def make_https_handler(config: dict):
-    web_root = config["web_root"]
-    subscription_path = "/" + str(config["subscription_path"]).lstrip("/")
-    subscription_name = posixpath.basename(subscription_path)
-    subscription_url = build_https_base(config["domain"], int(config["https_port"])) + subscription_path
-
-    class HTTPSHandler(QuietHandler):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, directory=web_root, **kwargs)
-
-        def do_GET(self):  # noqa: N802
-            parsed = urlsplit(self.path)
-            if parsed.path in ("/", ""):
-                body = (subscription_url + "\n").encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "text/plain; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
-                return
-            if parsed.path.startswith("/.well-known/acme-challenge/"):
-                return super().do_GET()
-            if parsed.path != subscription_path:
-                self.send_error(404)
-                return
-            self.path = "/" + subscription_name
-            return super().do_GET()
-
-        def do_HEAD(self):  # noqa: N802
-            parsed = urlsplit(self.path)
-            if parsed.path in ("/", ""):
-                body = (subscription_url + "\n").encode("utf-8")
-                self.send_response(200)
-                self.send_header("Content-Type", "text/plain; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                return
-            if parsed.path.startswith("/.well-known/acme-challenge/"):
-                return super().do_HEAD()
-            if parsed.path != subscription_path:
-                self.send_error(404)
-                return
-            self.path = "/" + subscription_name
-            return super().do_HEAD()
-
-    return HTTPSHandler
-
-
-def serve(config: dict, http_only: bool) -> None:
-    bind = str(config.get("bind", "0.0.0.0"))
-    http_port = int(config.get("http_port", 80))
-    https_port = int(config.get("https_port", 8443))
-    servers = []
-    threads = []
-
-    if http_only:
-        http_server = ThreadingHTTPServer((bind, http_port), make_http_handler(config, True))
-        servers.append(http_server)
-        threads.append(threading.Thread(target=http_server.serve_forever, daemon=True))
-    else:
-        https_server = ThreadingHTTPServer((bind, https_port), make_https_handler(config))
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        context.load_cert_chain(config["cert_file"], config["key_file"])
-        https_server.socket = context.wrap_socket(https_server.socket, server_side=True)
-        servers.append(https_server)
-        threads.append(threading.Thread(target=https_server.serve_forever, daemon=True))
-
-    stop_event = threading.Event()
-
-    def shutdown(*_args):
-        for srv in servers:
-            srv.shutdown()
-            srv.server_close()
-        stop_event.set()
-
-    signal.signal(signal.SIGTERM, shutdown)
-    signal.signal(signal.SIGINT, shutdown)
-
-    for thread in threads:
-        thread.start()
-
-    stop_event.wait()
-
-
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--config", required=True)
-    parser.add_argument("--http-only", action="store_true")
-    args = parser.parse_args()
-
-    config = load_config(args.config)
-    os.makedirs(config["web_root"], exist_ok=True)
-    serve(config, args.http_only)
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-PY
-    chmod 755 "${SUBSCRIPTION_SERVER_SCRIPT}"
-}
-
-write_subscription_server_config() {
-    mkdir -p "${SUBSCRIPTION_LIB_DIR}" "${SUBSCRIPTION_WWW_DIR}" "${SUBSCRIPTION_CERT_DIR}"
-    cat > "${SUBSCRIPTION_SERVER_CONFIG}" << EOF
-{
-  "bind": "${SUBSCRIPTION_BIND}",
-  "domain": "${SUBSCRIPTION_DOMAIN}",
-  "http_port": ${SUBSCRIPTION_HTTP_PORT},
-  "https_port": ${SUBSCRIPTION_HTTPS_PORT},
-  "web_root": "${SUBSCRIPTION_WWW_DIR}",
-  "subscription_path": "/${SUBSCRIPTION_PATH}",
-  "cert_file": "${SUBSCRIPTION_CERT_FILE}",
-  "key_file": "${SUBSCRIPTION_KEY_FILE}"
-}
-EOF
-}
-
-write_subscription_renew_script() {
-    mkdir -p "${SUBSCRIPTION_LIB_DIR}" "${SUBSCRIPTION_RUNTIME_DIR}"
-    cat > "${SUBSCRIPTION_RENEW_SCRIPT}" << EOF
-#!/bin/bash
-set -e
-
-ACME_BIN="${ACME_BIN}"
-ACME_HOME="${ACME_HOME}"
-DOMAIN="${SUBSCRIPTION_DOMAIN}"
-WEBROOT="${SUBSCRIPTION_WWW_DIR}"
-SERVER_SCRIPT="${SUBSCRIPTION_SERVER_SCRIPT}"
-SERVER_CONFIG="${SUBSCRIPTION_SERVER_CONFIG}"
-HTTP_PORT="${SUBSCRIPTION_HTTP_PORT}"
-LOG_FILE="${SUBSCRIPTION_RUNTIME_DIR}/renew-http.log"
-
-STOPPED_SERVICES=""
-TEMP_PID=""
-
-is_tcp_port_in_use() {
-    local port="\${1:-}"
-    if command -v ss >/dev/null 2>&1; then
-        ss -Hltn 2>/dev/null | awk '{print \$4}' | grep -Eq "(^|:|\\\\])\${port}\$"
-        return \$?
-    fi
-    if command -v netstat >/dev/null 2>&1; then
-        netstat -ltn 2>/dev/null | awk 'NR > 2 {print \$4}' | grep -Eq "(^|:|\\\\])\${port}\$"
-        return \$?
-    fi
-    if command -v lsof >/dev/null 2>&1; then
-        lsof -nP -iTCP:"\${port}" -sTCP:LISTEN >/dev/null 2>&1
-        return \$?
-    fi
-    return 1
-}
-
-systemd_unit_exists() {
-    local unit="\${1:-}"
-    systemctl list-unit-files "\${unit}.service" --no-legend 2>/dev/null | grep -q "^\${unit}\\.service"
-}
-
-restore_services() {
-    local svc
-    while IFS= read -r svc; do
-        if [[ -z "\${svc}" ]]; then
-            continue
-        fi
-        systemctl start "\${svc}" >/dev/null 2>&1 || true
-    done <<< "\${STOPPED_SERVICES}"
-    STOPPED_SERVICES=""
-}
-
-cleanup() {
-    if [[ -n "\${TEMP_PID}" ]]; then
-        kill "\${TEMP_PID}" >/dev/null 2>&1 || true
-        wait "\${TEMP_PID}" >/dev/null 2>&1 || true
-        TEMP_PID=""
-    fi
-    restore_services
-}
-
-trap cleanup EXIT
-
-if is_tcp_port_in_use "\${HTTP_PORT}"; then
-    for svc in nginx openresty apache2 httpd caddy; do
-        if ! systemd_unit_exists "\${svc}"; then
-            continue
-        fi
-        if ! systemctl is-active --quiet "\${svc}" >/dev/null 2>&1; then
-            continue
-        fi
-        if ! is_tcp_port_in_use "\${HTTP_PORT}"; then
-            break
-        fi
-        systemctl stop "\${svc}" >/dev/null 2>&1 || true
-        sleep 1
-        if ! systemctl is-active --quiet "\${svc}" >/dev/null 2>&1; then
-            STOPPED_SERVICES="\${svc}"$'\\n'"\${STOPPED_SERVICES}"
-        fi
-    done
-fi
-
-if is_tcp_port_in_use "\${HTTP_PORT}"; then
-    echo "Port \${HTTP_PORT} is still occupied; ACME renew cannot continue." >&2
-    exit 1
-fi
-
-nohup python3 "\${SERVER_SCRIPT}" --config "\${SERVER_CONFIG}" --http-only > "\${LOG_FILE}" 2>&1 &
-TEMP_PID=\$!
-sleep 1
-kill -0 "\${TEMP_PID}" >/dev/null 2>&1
-
-"\${ACME_BIN}" --home "\${ACME_HOME}" --renew -d "\${DOMAIN}" --ecc --webroot "\${WEBROOT}"
-EOF
-    chmod 755 "${SUBSCRIPTION_RENEW_SCRIPT}"
-}
-
-stop_acme_port_blockers() {
-    ACME_STOPPED_SERVICES=""
-
-    if ! is_tcp_port_in_use "${SUBSCRIPTION_HTTP_PORT}"; then
-        return 0
-    fi
-
+cleanup_legacy_subscription_https() {
     if ! command -v systemctl >/dev/null 2>&1; then
-        return 1
-    fi
-
-    local candidates=(nginx openresty apache2 httpd caddy)
-    local svc
-    for svc in "${candidates[@]}"; do
-        if ! systemd_unit_exists "${svc}"; then
-            continue
-        fi
-        if ! systemctl is-active --quiet "${svc}" >/dev/null 2>&1; then
-            continue
-        fi
-        if ! is_tcp_port_in_use "${SUBSCRIPTION_HTTP_PORT}"; then
-            break
-        fi
-
-        warn "Port ${SUBSCRIPTION_HTTP_PORT} is occupied; stopping ${svc} temporarily for ACME validation."
-        systemctl stop "${svc}" >/dev/null 2>&1 || true
-        sleep 1
-        if ! systemctl is-active --quiet "${svc}" >/dev/null 2>&1; then
-            ACME_STOPPED_SERVICES="${svc}"$'\n'"${ACME_STOPPED_SERVICES}"
-        fi
-    done
-
-    ! is_tcp_port_in_use "${SUBSCRIPTION_HTTP_PORT}"
-}
-
-restore_acme_port_blockers() {
-    local svc
-    if [[ -z "${ACME_STOPPED_SERVICES}" ]]; then
         return 0
     fi
 
-    while IFS= read -r svc; do
-        if [[ -z "${svc}" ]]; then
-            continue
-        fi
-        info "Restoring temporarily stopped service: ${svc}"
-        systemctl start "${svc}" >/dev/null 2>&1 || warn "Failed to restore ${svc}; please start it manually."
-    done <<< "${ACME_STOPPED_SERVICES}"
-
-    ACME_STOPPED_SERVICES=""
-}
-
-ensure_acme_client() {
-    mkdir -p "${ACME_HOME}"
-    if [[ -x "${ACME_BIN}" ]]; then
-        return 0
+    local changed="false"
+    if systemctl is-active --quiet "${LEGACY_SUBSCRIPTION_SERVICE_NAME}" 2>/dev/null \
+        || systemctl is-enabled --quiet "${LEGACY_SUBSCRIPTION_SERVICE_NAME}" 2>/dev/null \
+        || [[ -f "/etc/systemd/system/${LEGACY_SUBSCRIPTION_SERVICE_NAME}.service" ]]; then
+        changed="true"
+    fi
+    if systemctl is-active --quiet "${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}" 2>/dev/null \
+        || systemctl is-enabled --quiet "${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}" 2>/dev/null \
+        || [[ -f "/etc/systemd/system/${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}" ]] \
+        || [[ -f "/etc/systemd/system/sudoku-acme-renew.service" ]]; then
+        changed="true"
     fi
 
-    info "Installing acme.sh client..."
-    if ! curl -fsSL "https://raw.githubusercontent.com/acmesh-official/acme.sh/master/acme.sh" -o "${ACME_BIN}"; then
-        return_error "Failed to download acme.sh client"
-    fi
-    if ! chmod 755 "${ACME_BIN}"; then
-        return_error "Failed to prepare acme.sh client"
-    fi
-    success "acme.sh installed at ${ACME_BIN}"
-}
+    systemctl stop "${LEGACY_SUBSCRIPTION_SERVICE_NAME}" 2>/dev/null || true
+    systemctl disable "${LEGACY_SUBSCRIPTION_SERVICE_NAME}" 2>/dev/null || true
+    systemctl stop "${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}" 2>/dev/null || true
+    systemctl disable "${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}" 2>/dev/null || true
+    rm -f "/etc/systemd/system/${LEGACY_SUBSCRIPTION_SERVICE_NAME}.service"
+    rm -f "/etc/systemd/system/${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}"
+    rm -f "/etc/systemd/system/sudoku-acme-renew.service"
+    rm -rf "${LEGACY_SUBSCRIPTION_LIB_DIR}" "${LEGACY_SUBSCRIPTION_CERT_DIR}"
 
-start_temp_subscription_http_server() {
-    if is_tcp_port_in_use "${SUBSCRIPTION_HTTP_PORT}"; then
-        if ! stop_acme_port_blockers; then
-            restore_acme_port_blockers
-            return_error "Port ${SUBSCRIPTION_HTTP_PORT} is still occupied after attempting temporary release. Please free the port and retry."
-        fi
-    fi
-    if is_tcp_port_in_use "${SUBSCRIPTION_HTTP_PORT}"; then
-        restore_acme_port_blockers
-        return_error "Port ${SUBSCRIPTION_HTTP_PORT} is already in use. ACME HTTP-01 validation requires this port to be reachable."
-    fi
-
-    nohup python3 "${SUBSCRIPTION_SERVER_SCRIPT}" --config "${SUBSCRIPTION_SERVER_CONFIG}" --http-only \
-        > "${SUBSCRIPTION_RUNTIME_DIR}/http-only.log" 2>&1 &
-    SUBSCRIPTION_TEMP_PID=$!
-    sleep 1
-    if ! kill -0 "${SUBSCRIPTION_TEMP_PID}" >/dev/null 2>&1; then
-        restore_acme_port_blockers
-        return_error "Failed to start temporary HTTP server for ACME challenge"
-    fi
-}
-
-stop_temp_subscription_http_server() {
-    if [[ -n "${SUBSCRIPTION_TEMP_PID:-}" ]]; then
-        kill "${SUBSCRIPTION_TEMP_PID}" >/dev/null 2>&1 || true
-        wait "${SUBSCRIPTION_TEMP_PID}" >/dev/null 2>&1 || true
-        SUBSCRIPTION_TEMP_PID=""
-    fi
-    restore_acme_port_blockers
-}
-
-issue_subscription_certificate() {
-    if ! ensure_acme_client; then
-        return 1
-    fi
-    if ! write_subscription_server; then
-        return_error "Failed to write subscription server"
-    fi
-    if ! write_subscription_server_config; then
-        return_error "Failed to write subscription server config"
-    fi
-
-    local started_temp="false"
-    if ! start_temp_subscription_http_server; then
-        return 1
-    fi
-    started_temp="true"
-
-    info "Issuing ACME certificate for ${SUBSCRIPTION_DOMAIN}..."
-    "${ACME_BIN}" --home "${ACME_HOME}" --register-account -m "${ACME_EMAIL}" --server letsencrypt >/dev/null 2>&1 || true
-    if ! "${ACME_BIN}" --home "${ACME_HOME}" --issue --server letsencrypt --webroot "${SUBSCRIPTION_WWW_DIR}" -d "${SUBSCRIPTION_DOMAIN}" --keylength ec-256; then
-        if [[ "${started_temp}" == "true" ]]; then
-            stop_temp_subscription_http_server
-        fi
-        return_error "Failed to issue ACME certificate for ${SUBSCRIPTION_DOMAIN}"
-    fi
-
-    if ! "${ACME_BIN}" --home "${ACME_HOME}" --install-cert -d "${SUBSCRIPTION_DOMAIN}" --ecc \
-        --fullchain-file "${SUBSCRIPTION_CERT_FILE}" \
-        --key-file "${SUBSCRIPTION_KEY_FILE}" \
-        --reloadcmd "systemctl restart ${SUBSCRIPTION_SERVICE_NAME} >/dev/null 2>&1 || true"; then
-        if [[ "${started_temp}" == "true" ]]; then
-            stop_temp_subscription_http_server
-        fi
-        return_error "Failed to install ACME certificate for ${SUBSCRIPTION_DOMAIN}"
-    fi
-
-    if ! chmod 644 "${SUBSCRIPTION_CERT_FILE}"; then
-        return_error "Failed to set certificate permissions"
-    fi
-    if ! chmod 600 "${SUBSCRIPTION_KEY_FILE}"; then
-        return_error "Failed to set private key permissions"
-    fi
-
-    if [[ "${started_temp}" == "true" ]]; then
-        stop_temp_subscription_http_server
-    fi
-
-    success "ACME certificate is ready for ${SUBSCRIPTION_DOMAIN}"
-}
-
-create_subscription_service() {
-    info "Creating HTTPS subscription service..."
-    if ! command -v systemctl >/dev/null 2>&1; then
-        return_error "systemctl not found; HTTPS subscription service cannot be created"
-    fi
-    if ! write_subscription_server; then
-        return_error "Failed to write subscription server"
-    fi
-    if ! write_subscription_server_config; then
-        return_error "Failed to write subscription server config"
-    fi
-
-    if ! cat > "/etc/systemd/system/${SUBSCRIPTION_SERVICE_NAME}.service" << EOF
-[Unit]
-Description=Sudoku Mihomo HTTPS Subscription
-After=network.target
-
-[Service]
-Type=simple
-ExecStart=/usr/bin/env python3 ${SUBSCRIPTION_SERVER_SCRIPT} --config ${SUBSCRIPTION_SERVER_CONFIG}
-Restart=on-failure
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-EOF
-    then
-        return_error "Failed to write ${SUBSCRIPTION_SERVICE_NAME}.service"
-    fi
-
-    if ! systemctl daemon-reload; then
-        return_error "Failed to reload systemd for ${SUBSCRIPTION_SERVICE_NAME}"
-    fi
-    if ! systemctl enable "${SUBSCRIPTION_SERVICE_NAME}" >/dev/null 2>&1; then
-        return_error "Failed to enable ${SUBSCRIPTION_SERVICE_NAME}"
-    fi
-    if ! systemctl restart "${SUBSCRIPTION_SERVICE_NAME}" >/dev/null 2>&1 && ! systemctl start "${SUBSCRIPTION_SERVICE_NAME}" >/dev/null 2>&1; then
-        return_error "Failed to start ${SUBSCRIPTION_SERVICE_NAME}"
-    fi
-
-    if systemctl is-active --quiet "${SUBSCRIPTION_SERVICE_NAME}"; then
-        success "HTTPS subscription service started"
-    else
-        return_error "HTTPS subscription service failed to start. Check: journalctl -u ${SUBSCRIPTION_SERVICE_NAME}"
-    fi
-}
-
-create_acme_renew_timer() {
-    if ! command -v systemctl >/dev/null 2>&1; then
-        return_error "systemctl not found; ACME renew timer cannot be created"
-    fi
-    if ! write_subscription_renew_script; then
-        return_error "Failed to write ACME renew script"
-    fi
-
-    if ! cat > "/etc/systemd/system/sudoku-acme-renew.service" << EOF
-[Unit]
-Description=Renew ACME certificates for Sudoku subscription
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=oneshot
-ExecStart=${SUBSCRIPTION_RENEW_SCRIPT}
-EOF
-    then
-        return_error "Failed to write sudoku-acme-renew.service"
-    fi
-
-    if ! cat > "/etc/systemd/system/${SUBSCRIPTION_ACME_TIMER_NAME}" << EOF
-[Unit]
-Description=Daily ACME renew check for Sudoku subscription
-
-[Timer]
-OnCalendar=daily
-RandomizedDelaySec=1h
-Persistent=true
-
-[Install]
-WantedBy=timers.target
-EOF
-    then
-        return_error "Failed to write ${SUBSCRIPTION_ACME_TIMER_NAME}"
-    fi
-
-    if ! systemctl daemon-reload; then
-        return_error "Failed to reload systemd for ACME renew timer"
-    fi
-    if ! systemctl enable --now "${SUBSCRIPTION_ACME_TIMER_NAME}" >/dev/null 2>&1; then
-        return_error "Failed to enable ${SUBSCRIPTION_ACME_TIMER_NAME}"
-    fi
-}
-
-setup_subscription_https() {
-    if [[ "${SUBSCRIPTION_SETUP_ENABLED}" != "true" ]]; then
-        return 0
-    fi
-    if ! generate_subscription_config; then
-        return 1
-    fi
-    if ! issue_subscription_certificate; then
-        return 1
-    fi
-    if ! create_subscription_service; then
-        return 1
-    fi
-    if ! create_acme_renew_timer; then
-        return 1
+    if [[ "${changed}" == "true" ]]; then
+        systemctl daemon-reload
+        success "Removed legacy HTTPS subscription and ACME services"
     fi
 }
 
@@ -2923,15 +2207,12 @@ print_results() {
     echo -e "${YELLOW}${SHORT_LINK}${NC}"
     echo ""
     
-    echo -e "${CYAN}${BOLD}📋 Mihomo HTTPS Subscription:${NC}"
-    if [[ -n "${SUBSCRIPTION_URL:-}" ]]; then
-        echo -e "${YELLOW}${SUBSCRIPTION_URL}${NC}"
-    else
-        echo -e "${YELLOW}Unavailable${NC}"
-        if [[ -n "${SUBSCRIPTION_DISABLED_REASON:-}" ]]; then
-            echo -e "  ${YELLOW}${SUBSCRIPTION_DISABLED_REASON}${NC}"
-        fi
-    fi
+    echo -e "${CYAN}${BOLD}📋 Mihomo YAML Path:${NC}"
+    echo -e "${YELLOW}${SUBSCRIPTION_OUTPUT_FILE}${NC}"
+    echo ""
+
+    echo -e "${CYAN}${BOLD}🧩 Standalone Mihomo Node YAML:${NC}"
+    printf '%s\n' "${NODE_YAML}"
     echo ""
     
     echo -e "${CYAN}${BOLD}🔑 Keys (save these securely):${NC}"
@@ -2945,24 +2226,21 @@ print_results() {
     else
         echo -e "  Status:  ${YELLOW}systemctl status ${SERVICE_NAME}${NC}"
     fi
-    echo -e "  Sub:     ${YELLOW}systemctl status ${SUBSCRIPTION_SERVICE_NAME}${NC}"
     if [[ "${WARP_ENABLED}" == "true" ]]; then
         echo -e "  Restart: ${YELLOW}systemctl restart ${SING_BOX_SERVICE_NAME}${NC}"
     else
         echo -e "  Restart: ${YELLOW}systemctl restart ${SERVICE_NAME}${NC}"
     fi
-    echo -e "  Sub-Rst: ${YELLOW}systemctl restart ${SUBSCRIPTION_SERVICE_NAME}${NC}"
     if [[ "${WARP_ENABLED}" == "true" ]]; then
         echo -e "  Logs:    ${YELLOW}journalctl -u ${SING_BOX_SERVICE_NAME} -f${NC}"
     else
         echo -e "  Logs:    ${YELLOW}journalctl -u ${SERVICE_NAME} -f${NC}"
     fi
-    echo -e "  SubLog:  ${YELLOW}journalctl -u ${SUBSCRIPTION_SERVICE_NAME} -f${NC}"
     echo ""
     
     echo -e "${CYAN}${BOLD}📂 Configuration:${NC}"
     echo -e "  Config file: ${YELLOW}${CONFIG_DIR}/config.json${NC}"
-    echo -e "  Sub YAML:    ${YELLOW}${SUBSCRIPTION_OUTPUT_FILE}${NC}"
+    echo -e "  Mihomo YAML: ${YELLOW}${SUBSCRIPTION_OUTPUT_FILE}${NC}"
     if [[ -f "${EXPORT_STATE_FILE}" ]]; then
         echo -e "  Export state: ${YELLOW}${EXPORT_STATE_FILE}${NC}"
     fi
@@ -3022,26 +2300,24 @@ uninstall() {
     rm -f "/etc/systemd/system/${FALLBACK_SERVICE_NAME}.service"
     systemctl daemon-reload
 
-    systemctl stop "${SUBSCRIPTION_SERVICE_NAME}" 2>/dev/null || true
-    systemctl disable "${SUBSCRIPTION_SERVICE_NAME}" 2>/dev/null || true
-    rm -f "/etc/systemd/system/${SUBSCRIPTION_SERVICE_NAME}.service"
+    systemctl stop "${LEGACY_SUBSCRIPTION_SERVICE_NAME}" 2>/dev/null || true
+    systemctl disable "${LEGACY_SUBSCRIPTION_SERVICE_NAME}" 2>/dev/null || true
+    rm -f "/etc/systemd/system/${LEGACY_SUBSCRIPTION_SERVICE_NAME}.service"
 
-    systemctl stop "${SUBSCRIPTION_ACME_TIMER_NAME}" 2>/dev/null || true
-    systemctl disable "${SUBSCRIPTION_ACME_TIMER_NAME}" 2>/dev/null || true
-    rm -f "/etc/systemd/system/${SUBSCRIPTION_ACME_TIMER_NAME}"
+    systemctl stop "${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}" 2>/dev/null || true
+    systemctl disable "${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}" 2>/dev/null || true
+    rm -f "/etc/systemd/system/${LEGACY_SUBSCRIPTION_ACME_TIMER_NAME}"
     rm -f "/etc/systemd/system/sudoku-acme-renew.service"
     systemctl daemon-reload
 
     rm -f "${INSTALL_DIR}/sudoku"
     rm -rf "${CONFIG_DIR}"
     rm -rf "${FALLBACK_LIB_DIR}"
-    rm -rf "${SUBSCRIPTION_LIB_DIR}"
+    rm -rf "${LEGACY_SUBSCRIPTION_LIB_DIR}"
     
     # Remove firewall rule
     if command -v ufw &> /dev/null && ufw status | grep -q "Status: active"; then
         ufw delete allow "${uninstall_port}/tcp" > /dev/null 2>&1 || true
-        ufw delete allow "${SUBSCRIPTION_HTTP_PORT}/tcp" > /dev/null 2>&1 || true
-        ufw delete allow "${SUBSCRIPTION_HTTPS_PORT}/tcp" > /dev/null 2>&1 || true
     fi
     
     echo -e "${GREEN}Uninstallation complete.${NC}"
@@ -3069,6 +2345,7 @@ main() {
     detect_arch
     normalize_settings
     check_dependencies
+    cleanup_legacy_subscription_https
     
     echo ""
 
@@ -3090,11 +2367,8 @@ main() {
         else
             echo -e "${CYAN}${BOLD}⚙️  Service Management:${NC}"
             echo -e "  Status:  ${YELLOW}systemctl status ${SERVICE_NAME}${NC}"
-            echo -e "  Sub:     ${YELLOW}systemctl status ${SUBSCRIPTION_SERVICE_NAME}${NC}"
             echo -e "  Restart: ${YELLOW}systemctl restart ${SERVICE_NAME}${NC}"
-            echo -e "  Sub-Rst: ${YELLOW}systemctl restart ${SUBSCRIPTION_SERVICE_NAME}${NC}"
             echo -e "  Logs:    ${YELLOW}journalctl -u ${SERVICE_NAME} -f${NC}"
-            echo -e "  SubLog:  ${YELLOW}journalctl -u ${SUBSCRIPTION_SERVICE_NAME} -f${NC}"
             echo ""
         fi
         exit 0
@@ -3125,11 +2399,9 @@ main() {
     
     # Generate output
     generate_short_link
-    if [[ "${SUBSCRIPTION_SETUP_ENABLED}" == "true" ]] && ! setup_subscription_https; then
-        disable_subscription_setup "HTTPS subscription setup failed after Sudoku core was ready; sudoku:// short link is still available."
-    fi
+    generate_subscription_config
     if ! persist_export_state; then
-        record_nonfatal_issue "Failed to save export state; current sudoku:// short link is still available in this output."
+        record_nonfatal_issue "Failed to save export state; generated exports are still available in this output."
     fi
     
     # Display results
